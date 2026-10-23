@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -16,3 +16,35 @@ class ConfigBackupResponse(ConfigBackupBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class BackupHistoryItem(BaseModel):
+    id: int
+    device_id: int
+    version: int
+    checksum_sha256: str
+    backup_type: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DiffResponse(BaseModel):
+    backup_id_old: int
+    backup_id_new: int
+    version_old: int
+    version_new: int
+    has_changes: bool
+    lines_added: int
+    lines_removed: int
+    diff_text: str
+    diff_lines: List[Dict[str, str]]
+
+
+class BackupTriggerResponse(BaseModel):
+    status: str
+    task_id: Optional[str] = None
+    message: str
+    device_id: int
+    hostname: Optional[str] = None
+    version: Optional[int] = None
