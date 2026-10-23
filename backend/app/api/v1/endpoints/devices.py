@@ -10,9 +10,16 @@ from app.core.database import get_db
 from app.core.vault import vault
 from app.models.device import Device
 from app.models.device_group import DeviceGroup
+from app.models.port import Port
 from app.schemas.device import DeviceCreate, DeviceResponse, DeviceUpdate
 from app.services.automation_engine import automation_engine
 from app.services.config_redaction import redact_configuration
+from app.services.interface_config import (
+    UnsupportedInterfaceConfig,
+    extract_interface_config,
+    supports_interface_config,
+)
+from app.services.vendor_profiles import get_vendor_profile
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -104,6 +111,77 @@ async def get_device(
             detail=f"Device #{device_id} not found.",
         )
     return device
+
+
+@router.get("/{device_id}/ports/{port_id}/live-config")
+async def get_live_port_config(
+    device_id: int,
+    port_id: int,
+    current_user=Depends(require_role(["admin", "operator"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch a redacted configuration stanza for one enrolled device interface."""
+    device = await db.get(Device, device_id)
+    if device is None:
+        raise HTTPException(status_code=404, detail=f"Device #{device_id} not found.")
+    result = await db.execute(
+        select(Port).where(Port.id == port_id, Port.device_id == device_id)
+    )
+    port = result.scalar_one_or_none()
+    if port is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Port #{port_id} was not found on device #{device_id}.",
+        )
+    profile = get_vendor_profile(device.vendor, device.os_type, device.model)
+    if not supports_interface_config(profile.vendor_key):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Port-level configuration is not supported for vendor profile "
+                f"{profile.vendor_key}."
+            ),
+        )
+
+    try:
+        credentials = vault.decrypt_credentials(device.encrypted_credentials) or {}
+        full_config = await automation_engine.fetch_running_config(device, credentials)
+    except Exception:
+        device.status = "error"
+        await db.commit()
+        logger.exception(
+            "Live interface configuration request failed for device %s.",
+            device.hostname,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to retrieve configuration from the device.",
+        ) from None
+    device.status = "online"
+    await db.commit()
+    try:
+        config_text = extract_interface_config(
+            full_config,
+            port.name,
+            profile.vendor_key,
+        )
+    except UnsupportedInterfaceConfig as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    config_text, _redacted_lines = redact_configuration(config_text)
+
+    logger.info(
+        "Live interface configuration retrieved by %s for device %s port %s.",
+        current_user.username,
+        device.hostname,
+        port.name,
+    )
+    return {
+        "device_id": device.id,
+        "port_id": port.id,
+        "interface_name": port.name,
+        "config_text": config_text,
+        "retrieved_at": datetime.now(timezone.utc),
+    }
 
 
 @router.get("/{device_id}/live-config")

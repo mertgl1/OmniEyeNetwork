@@ -75,4 +75,15 @@ export interface Port {
   vlan: number | null;
   mac_address: string | null;
   speed: string | null;
+  duplex: string | null;
+  last_change: string | null;
+  last_discovered_at: string | null;
+}
+
+export interface LivePortConfig {
+  device_id: number;
+  port_id: number;
+  interface_name: string;
+  config_text: string;
+  retrieved_at: string;
 }

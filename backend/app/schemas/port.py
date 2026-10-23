@@ -33,6 +33,7 @@ class PortResponse(PortBase):
     id: int
     device_id: int
     last_change: Optional[datetime] = None
+    last_discovered_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

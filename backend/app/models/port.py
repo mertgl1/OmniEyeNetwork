@@ -19,6 +19,7 @@ class Port(Base):
     duplex = Column(String(32), nullable=True)  # Full, Half, Auto
 
     last_change = Column(DateTime(timezone=True), nullable=True)
+    last_discovered_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 

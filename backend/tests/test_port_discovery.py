@@ -123,6 +123,7 @@ async def test_port_discovery_upserts_port_rows(client: AsyncClient, monkeypatch
         assert ports[0].status == "up"
         assert ports[0].vlan == 10
         assert ports[0].mac_address == "001a.2b3c.4d5e"
+        assert ports[0].last_discovered_at is not None
 
 
 @pytest.mark.asyncio

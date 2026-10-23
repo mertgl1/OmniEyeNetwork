@@ -17,15 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Daily backup retention with a 30-day age threshold and a minimum of 10 retained versions per device.
 - Optional Docker Compose secret-file and bundled Nginx TLS overlays, with external reverse-proxy TLS deployment also supported.
 - Alembic index for per-device backup retention queries.
+- Interactive switch port grid and responsive searchable list, with cached port details and per-port discovery timestamps.
+- Admin/operator-only on-demand interface configuration endpoint for profiles with safely delimited stanza formats.
+- Sanitized interface-config fixtures for supported Cisco, Huawei, Aruba/HPE, Dell, and Juniper profiles.
 
 ### Security
 - Production secret values can be read from mounted Compose secret files instead of environment values.
 - TLS mode uses TLS 1.2/1.3, read-only certificate/key secrets, HTTP-to-HTTPS redirect, HSTS, and the existing restrictive frontend security headers.
+- Port hover/focus reads only stored inventory; live interface configuration requires an explicit authorized request, is scoped to one interface, and is redacted before return.
 - Existing snapshots are not modified by the audit or retention feature unless they meet the explicit age/minimum-version deletion policy.
 
 ### Changed
 - Bulk backup and port-discovery work is executed as multi-device Nornir batches rather than one Celery child task per device.
 - Docker Compose exposes bounded Nornir and configurable retention settings to the API and worker services.
+- Port inventory records the most recent successful discovery time; the dashboard paginates inventory results and sorts interface names naturally.
+- Firewall device support is listed as a future phase; initial vendor/model and policy-visibility scope remains to be confirmed.
 
 ## [0.5.0] - 2026-10-23
 

@@ -378,9 +378,17 @@ def _merge_discovered_ports(
     for item in discovered:
         existing = existing_ports.get(item["name"].casefold())
         if existing is None:
-            db.add(Port(device_id=device.id, **item, last_change=now))
+            db.add(
+                Port(
+                    device_id=device.id,
+                    **item,
+                    last_change=now,
+                    last_discovered_at=now,
+                )
+            )
             continue
         if existing.status != item["status"] or existing.admin_status != item["admin_status"]:
             existing.last_change = now
         for field, value in item.items():
             setattr(existing, field, value)
+        existing.last_discovered_at = now

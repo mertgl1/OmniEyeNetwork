@@ -62,6 +62,7 @@ erDiagram
       string mac_address
       string speed
       datetime last_change
+      datetime last_discovered_at
     }
     ConfigBackup {
       int id PK
@@ -90,6 +91,9 @@ Alembic runs before the backend starts. The initial baseline migration creates m
 - Device records are enrolled by an administrator. SSH credentials are encrypted before persistence.
 - Vendor profiles provide the driver and read-only commands for interface state, VLANs, MAC tables, version, and configuration retrieval.
 - Port discovery is dispatched to Celery and scheduled hourly. Vendor-keyed parsers cover all 12 declared profiles with sanitized synthetic fixtures. An output layout that yields no recognizable interfaces is reported as unsupported instead of a successful empty inventory.
+- Each successfully discovered port records `last_discovered_at`. The dashboard's switch view displays cached state with that timestamp; hover/focus never opens a device connection.
+- The port grid is sized from discovered interface records, with a searchable list alternative. No fixed 24/48-port hardware assumption is made.
+- Admins/operators can explicitly request one interface's live config. Cisco IOS/NX-OS/XR, Huawei VRP, ArubaOS-CX, HPE ProCurve/Comware, Dell OS10, and Juniper JunOS use bounded stanza extraction; unsupported profiles or ambiguous output return an explicit error rather than full-device config.
 - Manual and live configuration retrieval use Nornir/Netmiko. Bulk and scheduled backup batches execute concurrently through Nornir; an individual device failure does not discard successful results from other devices.
 - Async API connections run outside the event loop. Threaded Nornir work is bounded by `NORNIR_NUM_WORKERS` (default 20, maximum 100).
 - A failed SSH connection is reported as a failure. Simulated data is used only in explicit simulation mode or tests.
@@ -113,6 +117,7 @@ Protected API routes verify the JWT, load the active user, and compare the token
 - Older development installations with an invalid Fernet key retain the legacy PBKDF2 derivation for compatibility and emit a critical log. It is not accepted in production; migrate encrypted records to a generated key before promoting such an installation.
 - For an existing MariaDB volume, the mounted DB password secret must match the current database user's password; changing the secret file alone does not rotate the database credential. Rotate the Vault key only with a planned credential re-encryption procedure.
 - New snapshots are redacted before persistence and checksum calculation; live config responses receive the same redaction. Common password, secret, key, SNMP community, token, and key/value assignment forms are masked. Pattern-based redaction cannot guarantee discovery of every vendor's secret syntax; add sanitized fixtures for new syntax.
+- Live interface config is returned only to admins/operators after checking that the requested port belongs to the requested device. The backend extracts the selected vendor stanza before redaction and never returns the whole running configuration from this endpoint.
 - Historical snapshots are deliberately left unchanged. Admins can use `GET /api/v1/backups/audit/redaction` to scan paginated metadata about potential secret-bearing lines; the endpoint never returns configuration text or secret values.
 - Only admins/operators can retrieve stored snapshot content or diffs; viewers can access history metadata.
 - Daily retention deletes backups older than `BACKUP_RETENTION_DAYS` (default 30), except the newest `BACKUP_MIN_VERSIONS` per device (default 10), which are always preserved. This does not rewrite or re-redact legacy backups.
@@ -152,6 +157,7 @@ Base path: `/api/v1`.
 | `/auth/login`, `/auth/me`, `/auth/roles` | Authentication and role metadata |
 | `/devices`, `/groups`, `/ports` | Inventory CRUD, role protected |
 | `/devices/{id}/live-config` | On-demand live config for admins/operators |
+| `/devices/{id}/ports/{port_id}/live-config` | Explicit, redacted interface-scoped live config for admins/operators; supported vendor formats only |
 | `/ports/discovery/run` | Queue port discovery |
 | `/backups/devices/{id}/run`, `/backups/run-all` | Manual/scheduled backup processing |
 | `/backups/devices/{id}` | Backup history metadata |
@@ -162,7 +168,14 @@ Base path: `/api/v1`.
 
 Interactive OpenAPI documentation is enabled outside production and disabled in production.
 
-## 9. Change and validation expectations
+## 10. Next planned capability
+
+Firewall device support follows the switch port-view work. Before implementation,
+confirm supported firewall vendors/models and whether the first release includes
+only inventory/telemetry or also policy visibility. Firewall-specific commands
+and parsers are intentionally outside the current switch-view scope.
+
+## 11. Change and validation expectations
 
 - Add an Alembic revision for every schema change; do not modify the database volume manually.
 - Add sanitized parser tests for each vendor output format and mock all external device connections in unit tests.

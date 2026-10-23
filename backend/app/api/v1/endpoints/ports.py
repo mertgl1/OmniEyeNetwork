@@ -62,7 +62,7 @@ async def list_ports(
     if status_filter:
         query = query.filter(Port.status == status_filter)
 
-    query = query.offset(skip).limit(limit)
+    query = query.order_by(Port.name, Port.id).offset(skip).limit(limit)
     result = await db.execute(query)
     return result.scalars().all()
 

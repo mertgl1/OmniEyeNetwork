@@ -14,6 +14,8 @@
 - Nightly backups and daily cleanup: 30-day retention with at least 10 versions kept per device.
 - Hourly, read-only port/VLAN/MAC discovery with fixture-tested parsers for all 12 supported vendor profiles.
 - On-demand live configuration retrieval for authorized operators.
+- Interactive switch port grid plus searchable responsive list; hover/focus shows cached status/VLAN/MAC/speed details without connecting to the device.
+- Explicit, role-protected per-port live configuration for supported vendor formats; the response is isolated to the requested interface and redacted.
 - Vue 3 + TypeScript dashboard with inventory, port status, device enrollment, and config viewing.
 - xterm.js command console over WebSocket, restricted server-side to each vendor's predefined read-only interface, VLAN, MAC, and version commands. It is **not** an unrestricted shell.
 
@@ -163,6 +165,7 @@ All application API paths are under `/api/v1`.
 | Auth | `POST /auth/login`, `GET /auth/me`, `GET /auth/roles` | Login public; profile authenticated |
 | Inventory | `/devices`, `/groups`, `/ports` | Reads authenticated; mutations admin |
 | Live config | `GET /devices/{id}/live-config` | Admin/operator |
+| Live port config | `GET /devices/{id}/ports/{port_id}/live-config` | Admin/operator; supported profiles only, interface-scoped and redacted |
 | Discovery | `POST /ports/discovery/run` | Admin/operator; queued |
 | Backups | `/backups` | History authenticated; config and diff admin/operator; redaction audit admin |
 | Web terminal | `WS /terminal/devices/{id}` | Admin/operator; allowlisted read-only commands only |
@@ -178,7 +181,9 @@ New snapshots and live config responses redact common password, secret, key, com
 - [x] Phase 4 — Scheduled port discovery, live config API, authenticated WebSocket command console.
 - [x] Phase 5 — Vue dashboard, xterm.js interface, Docker/Nginx integration.
 
-Additional vendor/firmware output formats should be added with sanitized fixtures and lab verification. The 12 currently declared vendor profiles have representative parser fixtures; unsupported layouts are reported rather than treated as successful empty discovery.
+The switch port view records discovery timestamps and supports dynamic port counts rather than fixed 24/48-port layouts. Per-interface live config is currently supported for Cisco IOS/NX-OS/XR, Huawei VRP, ArubaOS-CX, HPE ProCurve/Comware, Dell OS10, and Juniper JunOS. Other profiles return an explicit unsupported response rather than exposing the full device configuration. Add vendor/firmware output support with sanitized fixtures and lab verification.
+
+**Next planned phase:** firewall inventory and visibility. Supported firewall vendors/models and whether the initial scope includes policy visibility will be agreed before implementation; firewall-specific commands are not part of the switch port view.
 
 ## Documentation
 
