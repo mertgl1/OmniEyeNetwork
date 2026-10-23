@@ -39,10 +39,14 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
+        if self.ENVIRONMENT == "test":
+            return "sqlite+aiosqlite:///:memory:"
         return f"mysql+asyncmy://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}?charset=utf8mb4"
 
     @property
     def sync_database_url(self) -> str:
+        if self.ENVIRONMENT == "test":
+            return "sqlite:///:memory:"
         return f"mysql+pymysql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}?charset=utf8mb4"
 
     model_config = SettingsConfigDict(

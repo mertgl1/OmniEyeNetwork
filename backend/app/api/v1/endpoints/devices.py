@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
+from app.core.vault import vault
 from app.models.device import Device
 from app.models.device_group import DeviceGroup
 from app.schemas.device import DeviceCreate, DeviceResponse, DeviceUpdate
@@ -61,7 +62,19 @@ async def create_device(
             )
 
     device_data = device_in.model_dump(exclude={"username", "password", "enable_secret"})
-    # TODO in Phase 2: Encrypt credentials with Vault AES-256 and store in encrypted_credentials
+
+    # Encrypt credentials with AES-256 Vault if supplied
+    cred_dict = {}
+    if device_in.username:
+        cred_dict["username"] = device_in.username
+    if device_in.password:
+        cred_dict["password"] = device_in.password
+    if device_in.enable_secret:
+        cred_dict["enable_secret"] = device_in.enable_secret
+
+    if cred_dict:
+        device_data["encrypted_credentials"] = vault.encrypt_credentials(cred_dict)
+
     device = Device(**device_data)
     db.add(device)
     await db.commit()
@@ -99,6 +112,19 @@ async def update_device(
         )
 
     update_data = device_in.model_dump(exclude_unset=True, exclude={"username", "password", "enable_secret"})
+
+    # Update Vault credentials if any credential fields are explicitly updated
+    if any(k in device_in.model_fields_set for k in ("username", "password", "enable_secret")):
+        existing_creds = vault.decrypt_credentials(device.encrypted_credentials) or {}
+        if device_in.username is not None:
+            existing_creds["username"] = device_in.username
+        if device_in.password is not None:
+            existing_creds["password"] = device_in.password
+        if device_in.enable_secret is not None:
+            existing_creds["enable_secret"] = device_in.enable_secret
+
+        if existing_creds:
+            update_data["encrypted_credentials"] = vault.encrypt_credentials(existing_creds)
 
     # Check hostname collision
     if "hostname" in update_data and update_data["hostname"] != device.hostname:
