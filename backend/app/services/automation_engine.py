@@ -2,6 +2,11 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 from app.core.config import settings
+from app.services.nornir_runner import (
+    DeviceCommandRequest,
+    DeviceCommandResult,
+    run_device_commands,
+)
 from app.services.vendor_profiles import get_vendor_profile
 
 logger = logging.getLogger(__name__)
@@ -129,21 +134,73 @@ end"""
             return self._generate_simulated_config(device, profile)
 
         try:
-            return await asyncio.to_thread(
-                self._send_device_command,
-                device,
-                profile,
-                credentials or {},
-                profile.backup_command,
+            result = await self.fetch_running_configs(
+                {device.hostname: (device, credentials or {})}
             )
-        except Exception as e:
+            return result[device.hostname]["config"]
+        except Exception:
             logger.warning(
                 "Configuration retrieval failed for device %s (%s).",
                 device.hostname,
                 device.ip_address,
                 exc_info=True,
             )
-            raise RuntimeError(f"Failed to connect to device {device.hostname} ({device.ip_address}): {str(e)}")
+            raise RuntimeError(
+                f"Failed to retrieve configuration from device {device.hostname}."
+            ) from None
+
+    async def fetch_running_configs(
+        self,
+        devices: Dict[str, tuple[Any, Dict[str, Any]]],
+    ) -> Dict[str, Dict[str, str]]:
+        """Fetch configurations concurrently; individual device failures are isolated."""
+        if self._simulation_enabled():
+            return {
+                key: {
+                    "config": self._generate_simulated_config(
+                        device,
+                        get_vendor_profile(
+                            getattr(device, "vendor", "cisco"),
+                            getattr(device, "os_type", None),
+                            getattr(device, "model", None),
+                        ),
+                    )
+                }
+                for key, (device, _credentials) in devices.items()
+            }
+
+        requests = []
+        request_keys = []
+        failed: Dict[str, Dict[str, str]] = {}
+        for key, (device, credentials) in devices.items():
+            profile = get_vendor_profile(
+                getattr(device, "vendor", "cisco"),
+                getattr(device, "os_type", None),
+                getattr(device, "model", None),
+            )
+            try:
+                requests.append(
+                    self._command_request(
+                        key,
+                        device,
+                        profile,
+                        credentials,
+                        {"config": profile.backup_command},
+                    )
+                )
+                request_keys.append(key)
+            except ValueError:
+                failed[key] = {}
+
+        results = await asyncio.to_thread(
+            run_device_commands,
+            requests,
+            settings.NORNIR_NUM_WORKERS,
+        )
+        for key in request_keys:
+            result = results[key]
+            failed[key] = result.outputs or {}
+        return failed
 
     async def fetch_inventory_outputs(
         self,
@@ -163,13 +220,58 @@ end"""
         }
         if self._simulation_enabled():
             return self._simulated_inventory_outputs()
-        return await asyncio.to_thread(
-            self._collect_inventory_outputs,
-            device,
-            profile,
-            credentials or {},
-            commands,
+        result = await self.fetch_inventory_outputs_batch(
+            {device.hostname: (device, credentials or {})}
         )
+        outputs = result.get(device.hostname)
+        if outputs is None:
+            raise RuntimeError(
+                f"Failed to retrieve inventory from device {device.hostname}."
+            )
+        return outputs
+
+    async def fetch_inventory_outputs_batch(
+        self,
+        devices: Dict[str, tuple[Any, Dict[str, Any]]],
+    ) -> Dict[str, Dict[str, str]]:
+        """Fetch per-device interface, VLAN and MAC command output concurrently."""
+        if self._simulation_enabled():
+            return {
+                key: self._simulated_inventory_outputs()
+                for key in devices
+            }
+
+        requests = []
+        request_keys = []
+        for key, (device, credentials) in devices.items():
+            profile = get_vendor_profile(
+                getattr(device, "vendor", "cisco"),
+                getattr(device, "os_type", None),
+                getattr(device, "model", None),
+            )
+            commands = {
+                "interfaces": profile.interface_command,
+                "vlans": profile.vlan_command,
+                "macs": profile.mac_command,
+            }
+            try:
+                requests.append(
+                    self._command_request(key, device, profile, credentials, commands)
+                )
+                request_keys.append(key)
+            except ValueError:
+                continue
+
+        results = await asyncio.to_thread(
+            run_device_commands,
+            requests,
+            settings.NORNIR_NUM_WORKERS,
+        )
+        return {
+            key: results[key].outputs
+            for key in request_keys
+            if results[key].outputs is not None
+        }
 
     async def send_readonly_command(
         self,
@@ -193,70 +295,98 @@ end"""
             raise ValueError("Command is not in the device's read-only command allowlist.")
         if self._simulation_enabled():
             return f"Simulation mode: {command}\nNo device connection was made."
-        return await asyncio.to_thread(
-            self._send_device_command,
-            device,
-            profile,
-            credentials or {},
-            command,
+        result = await self.fetch_readonly_commands(
+            {
+                device.hostname: (
+                    device,
+                    credentials or {},
+                    command,
+                )
+            }
         )
+        output = result.get(device.hostname)
+        if output is None:
+            raise RuntimeError(
+                f"Failed to execute read-only command on device {device.hostname}."
+            )
+        return output
+
+    async def fetch_readonly_commands(
+        self,
+        devices: Dict[str, tuple[Any, Dict[str, Any], str]],
+    ) -> Dict[str, str]:
+        """Execute allowlisted commands concurrently and isolate device failures."""
+        requests = []
+        request_keys = []
+        for key, (device, credentials, command) in devices.items():
+            profile = get_vendor_profile(
+                getattr(device, "vendor", "cisco"),
+                getattr(device, "os_type", None),
+                getattr(device, "model", None),
+            )
+            allowed_commands = {
+                profile.interface_command,
+                profile.vlan_command,
+                profile.mac_command,
+                profile.version_command,
+            }
+            if command not in allowed_commands:
+                raise ValueError(
+                    "Command is not in the device's read-only command allowlist."
+                )
+            try:
+                requests.append(
+                    self._command_request(
+                        key, device, profile, credentials, {"output": command}
+                    )
+                )
+                request_keys.append(key)
+            except ValueError:
+                continue
+
+        if self._simulation_enabled():
+            return {
+                key: f"Simulation mode: {command}\nNo device connection was made."
+                for key, (_device, _credentials, command) in devices.items()
+            }
+
+        results = await asyncio.to_thread(
+            run_device_commands,
+            requests,
+            settings.NORNIR_NUM_WORKERS,
+        )
+        return {
+            key: results[key].outputs["output"]
+            for key in request_keys
+            if results[key].outputs is not None
+        }
 
     def _simulation_enabled(self) -> bool:
         return settings.ENVIRONMENT == "test" or self.simulation_mode in ("true", "1", "yes")
 
     @staticmethod
-    def _device_params(device: Any, profile: Any, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        if not credentials.get("username") or not credentials.get("password"):
-            raise RuntimeError("Device SSH credentials are not configured.")
-        return {
-            "device_type": profile.os_type,
-            "host": device.ip_address,
-            "port": device.ssh_port or 22,
-            "username": credentials["username"],
-            "password": credentials["password"],
-            "secret": credentials.get("enable_secret", ""),
-            "timeout": 20,
-            "session_timeout": 60,
-            "ssh_strict": settings.SSH_STRICT_HOST_KEY_CHECKING,
-            "system_host_keys": settings.SSH_STRICT_HOST_KEY_CHECKING,
-        }
-
-    @classmethod
-    def _send_device_command(
-        cls,
-        device: Any,
-        profile: Any,
-        credentials: Dict[str, Any],
-        command: str,
-    ) -> str:
-        from netmiko import ConnectHandler
-
-        with ConnectHandler(**cls._device_params(device, profile, credentials)) as connection:
-            if credentials.get("enable_secret"):
-                connection.enable()
-            if profile.paging_disable_command:
-                connection.send_command(profile.paging_disable_command)
-            return connection.send_command(command)
-
-    @classmethod
-    def _collect_inventory_outputs(
-        cls,
+    def _command_request(
+        key: str,
         device: Any,
         profile: Any,
         credentials: Dict[str, Any],
         commands: Dict[str, str],
-    ) -> Dict[str, str]:
-        from netmiko import ConnectHandler
-
-        with ConnectHandler(**cls._device_params(device, profile, credentials)) as connection:
-            if credentials.get("enable_secret"):
-                connection.enable()
-            if profile.paging_disable_command:
-                connection.send_command(profile.paging_disable_command)
-            return {
-                key: connection.send_command(command)
-                for key, command in commands.items()
-            }
+    ) -> DeviceCommandRequest:
+        if not credentials.get("username") or not credentials.get("password"):
+            raise ValueError("Device SSH credentials are not configured.")
+        return DeviceCommandRequest(
+            key=key,
+            hostname=device.hostname,
+            ip_address=device.ip_address,
+            port=device.ssh_port or 22,
+            username=credentials["username"],
+            password=credentials["password"],
+            device_type=profile.os_type,
+            commands=commands,
+            enable_secret=credentials.get("enable_secret", ""),
+            paging_disable_command=profile.paging_disable_command,
+            ssh_strict=settings.SSH_STRICT_HOST_KEY_CHECKING,
+        )
 
     @staticmethod
     def _simulated_inventory_outputs() -> Dict[str, str]:

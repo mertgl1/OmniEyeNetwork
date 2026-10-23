@@ -1,6 +1,9 @@
 import pytest
 from types import SimpleNamespace
 from httpx import AsyncClient
+from conftest import TestingSessionLocal
+from app.models.config_backup import ConfigBackup
+from app.services.automation_engine import automation_engine
 from app.services.diff_service import calculate_sha256, generate_config_diff
 
 
@@ -120,3 +123,60 @@ async def test_backup_and_diff_flow(client: AsyncClient, monkeypatch):
     assert bulk_res.status_code == 200
     assert bulk_res.json()["status"] == "dispatched"
     assert bulk_res.json()["task_id"] == "test-backup-task"
+
+
+@pytest.mark.asyncio
+async def test_backup_redaction_and_legacy_audit_never_expose_secrets(
+    client: AsyncClient,
+    monkeypatch,
+):
+    device = await client.post(
+        "/api/v1/devices",
+        json={
+            "hostname": "redaction-switch",
+            "ip_address": "192.0.2.30",
+            "vendor": "Cisco",
+            "os_type": "cisco_ios",
+        },
+    )
+    assert device.status_code == 201
+
+    async def fake_config(_device, _credentials):
+        return (
+            "hostname redaction-switch\n"
+            "enable secret 9 fresh-secret-value\n"
+            "service password-encryption\n"
+        )
+
+    monkeypatch.setattr(automation_engine, "fetch_running_config", fake_config)
+    created = await client.post(
+        f"/api/v1/backups/devices/{device.json()['id']}/run"
+    )
+    assert created.status_code == 200
+    history = await client.get(
+        f"/api/v1/backups/devices/{device.json()['id']}"
+    )
+    current_backup = await client.get(
+        f"/api/v1/backups/{history.json()[0]['id']}"
+    )
+    assert "fresh-secret-value" not in current_backup.json()["config_text"]
+    assert "[REDACTED]" in current_backup.json()["config_text"]
+
+    async with TestingSessionLocal() as db:
+        db.add(
+            ConfigBackup(
+                device_id=device.json()["id"],
+                config_text="snmp-server community legacy-secret RO\n",
+                checksum_sha256="legacy",
+                version=0,
+                backup_type="legacy",
+            )
+        )
+        await db.commit()
+
+    audit = await client.get("/api/v1/backups/audit/redaction")
+    assert audit.status_code == 200
+    report = audit.json()
+    assert report["flagged_count"] == 1
+    assert report["findings"][0]["potential_secret_lines"] == 1
+    assert "legacy-secret" not in audit.text

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, func
+from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, func
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
@@ -6,6 +6,14 @@ from app.core.database import Base
 
 class ConfigBackup(Base):
     __tablename__ = "config_backups"
+    __table_args__ = (
+        Index(
+            "ix_config_backups_device_created_version",
+            "device_id",
+            "created_at",
+            "version",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     device_id = Column(Integer, ForeignKey("devices.id", ondelete="CASCADE"), nullable=False, index=True)

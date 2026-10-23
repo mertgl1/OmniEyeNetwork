@@ -17,12 +17,13 @@ flowchart TB
   API --> Redis[(Redis)]
   Beat["Celery Beat"] --> Redis
   Redis --> Worker["Celery worker pool"]
-  Worker --> Netmiko["Netmiko"]
-  API --> Netmiko
+  Worker --> Nornir["Nornir in-memory inventory"]
+  API --> Nornir
+  Nornir --> Netmiko["Nornir Netmiko plugin"]
   Netmiko --> Device["Enrolled devices"]
 ```
 
-Network operations use Netmiko and vendor profiles. Celery tasks fan out work by device across workers. Nornir is present as a dependency but is not currently used by the execution engine.
+Network operations use Nornir with an in-memory inventory and the Nornir Netmiko connection plugin. Device credentials are decrypted in process memory and are not persisted in inventory files or included in Celery task arguments. Nornir's threaded runner bounds concurrent sessions through `NORNIR_NUM_WORKERS`; Celery isolates bulk work from HTTP requests.
 
 ## 2. Data model
 
@@ -88,9 +89,9 @@ Alembic runs before the backend starts. The initial baseline migration creates m
 
 - Device records are enrolled by an administrator. SSH credentials are encrypted before persistence.
 - Vendor profiles provide the driver and read-only commands for interface state, VLANs, MAC tables, version, and configuration retrieval.
-- Port discovery is dispatched to Celery and scheduled hourly. It parses supported common CLI layouts and upserts interface status/VLAN/MAC attributes. Unsupported output layouts can produce incomplete data; vendor-specific parser tests should accompany new profiles.
-- Manual configuration retrieval uses the live-config API. Backups are versioned by SHA-256; bulk and scheduled backups fan out across Celery workers.
-- Live connections run in a thread rather than blocking the async API event loop.
+- Port discovery is dispatched to Celery and scheduled hourly. Vendor-keyed parsers cover all 12 declared profiles with sanitized synthetic fixtures. An output layout that yields no recognizable interfaces is reported as unsupported instead of a successful empty inventory.
+- Manual and live configuration retrieval use Nornir/Netmiko. Bulk and scheduled backup batches execute concurrently through Nornir; an individual device failure does not discard successful results from other devices.
+- Async API connections run outside the event loop. Threaded Nornir work is bounded by `NORNIR_NUM_WORKERS` (default 20, maximum 100).
 - A failed SSH connection is reported as a failure. Simulated data is used only in explicit simulation mode or tests.
 
 ## 4. Authentication and authorization
@@ -110,7 +111,11 @@ Protected API routes verify the JWT, load the active user, and compare the token
 - Credentials use Fernet (AES-128-CBC plus HMAC-SHA256) with a valid URL-safe 32-byte key; the backend never serializes credential fields into `DeviceResponse`.
 - Production startup requires a valid Fernet key, a sufficiently long JWT signing secret, mock authentication disabled, debug disabled, and SSH host-key checking enabled.
 - Older development installations with an invalid Fernet key retain the legacy PBKDF2 derivation for compatibility and emit a critical log. It is not accepted in production; migrate encrypted records to a generated key before promoting such an installation.
-- Configuration snapshots can include secrets. Only admins/operators can retrieve full snapshots or diffs; viewers can access history metadata.
+- For an existing MariaDB volume, the mounted DB password secret must match the current database user's password; changing the secret file alone does not rotate the database credential. Rotate the Vault key only with a planned credential re-encryption procedure.
+- New snapshots are redacted before persistence and checksum calculation; live config responses receive the same redaction. Common password, secret, key, SNMP community, token, and key/value assignment forms are masked. Pattern-based redaction cannot guarantee discovery of every vendor's secret syntax; add sanitized fixtures for new syntax.
+- Historical snapshots are deliberately left unchanged. Admins can use `GET /api/v1/backups/audit/redaction` to scan paginated metadata about potential secret-bearing lines; the endpoint never returns configuration text or secret values.
+- Only admins/operators can retrieve stored snapshot content or diffs; viewers can access history metadata.
+- Daily retention deletes backups older than `BACKUP_RETENTION_DAYS` (default 30), except the newest `BACKUP_MIN_VERSIONS` per device (default 10), which are always preserved. This does not rewrite or re-redact legacy backups.
 - Never log passwords, tokens, decrypted credentials, or full device configurations.
 
 ## 6. WebSocket command console
@@ -129,9 +134,13 @@ The feature is a constrained, read-only command console, not an unrestricted Web
 
 - Celery Beat dispatches configuration backups daily at 03:00 in `CELERY_TIMEZONE` (default `Europe/Istanbul`).
 - Celery Beat dispatches port discovery hourly.
+- Celery Beat runs backup retention daily at 04:00 in `CELERY_TIMEZONE`.
 - Worker concurrency is configured with `CELERY_CONCURRENCY` (default `8`).
+- Nornir thread concurrency within one batch is configured with `NORNIR_NUM_WORKERS` (default `20`, range 1–100).
 - MariaDB and Redis use named Docker volumes. Their host ports bind to loopback by default.
-- The Compose stack does not terminate HTTPS. Production deployments must provide TLS, managed secrets, network segmentation, backups, monitoring, and a trusted SSH `known_hosts` file.
+- The default Compose stack serves local HTTP. `docker-compose.secrets.yml` mounts DB, Vault, JWT, and DB-root values as Compose secrets. `docker-compose.tls.yml` adds bundled Nginx TLS termination using read-only TLS secrets; alternatively, terminate TLS at a trusted external reverse proxy and keep the frontend HTTP upstream loopback-only.
+- Compose secrets are file-backed on local deployments; production installations may replace them with their organization's secret manager. Do not commit secret files or TLS private keys.
+- Production deployments must also provide network segmentation, database backups, monitoring, and a trusted SSH `known_hosts` file.
 
 ## 8. API surface
 
@@ -147,6 +156,7 @@ Base path: `/api/v1`.
 | `/backups/devices/{id}/run`, `/backups/run-all` | Manual/scheduled backup processing |
 | `/backups/devices/{id}` | Backup history metadata |
 | `/backups/{id}`, `/backups/diff/compare` | Sensitive config content and diff |
+| `/backups/audit/redaction` | Admin-only, paginated metadata-only report for legacy snapshots |
 | `/vendors` | Vendor profile catalog |
 | `/terminal/devices/{id}` (WebSocket) | Allowlisted read-only command stream |
 
@@ -155,6 +165,6 @@ Interactive OpenAPI documentation is enabled outside production and disabled in 
 ## 9. Change and validation expectations
 
 - Add an Alembic revision for every schema change; do not modify the database volume manually.
-- Add parser tests for each vendor output format and mock all external device connections in unit tests.
+- Add sanitized parser tests for each vendor output format and mock all external device connections in unit tests.
 - Run backend tests, frontend type-check/build, `npm audit`, Compose validation, and container health checks before release.
 - Never run `docker compose down -v` as a routine update command.

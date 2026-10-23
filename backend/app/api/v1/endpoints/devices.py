@@ -12,6 +12,7 @@ from app.models.device import Device
 from app.models.device_group import DeviceGroup
 from app.schemas.device import DeviceCreate, DeviceResponse, DeviceUpdate
 from app.services.automation_engine import automation_engine
+from app.services.config_redaction import redact_configuration
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -118,6 +119,7 @@ async def get_live_config(
     try:
         credentials = vault.decrypt_credentials(device.encrypted_credentials) or {}
         config_text = await automation_engine.fetch_running_config(device, credentials)
+        config_text, _redacted_lines = redact_configuration(config_text)
     except Exception:
         device.status = "error"
         await db.commit()

@@ -1,10 +1,17 @@
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from httpx import AsyncClient
 
 from app.services.automation_engine import automation_engine
-from app.services.port_discovery import parse_port_inventory, sync_device_ports
+from app.services.port_discovery import (
+    UnsupportedInventoryOutput,
+    parse_port_inventory,
+    sync_device_ports,
+)
+from app.services.vendor_profiles import VENDOR_PROFILES
 from app.models.device import Device
 from app.models.port import Port
 from sqlalchemy import select
@@ -18,6 +25,26 @@ def test_parse_interface_vlan_and_mac_inventory():
     assert first["status"] == "up"
     assert first["vlan"] == 10
     assert first["mac_address"] == "001a.2b3c.4d5e"
+
+
+def test_every_supported_vendor_has_a_fixture_and_parser():
+    fixture_path = Path(__file__).parent / "fixtures" / "vendor_inventory.json"
+    fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))
+    assert set(fixtures) == set(VENDOR_PROFILES)
+
+    for vendor_key, output in fixtures.items():
+        parsed = parse_port_inventory(output, vendor_key)
+        assert len(parsed) == 1, vendor_key
+        port = parsed[0]
+        assert port["name"] == output["port"], vendor_key
+        assert port["status"] == "up", vendor_key
+        assert port["vlan"] == 10, vendor_key
+        assert port["mac_address"] == output["mac"], vendor_key
+
+
+def test_unrecognized_interface_output_is_reported():
+    with pytest.raises(UnsupportedInventoryOutput, match="No interfaces"):
+        parse_port_inventory({"interfaces": "unexpected device output"}, "cisco_ios")
 
 
 @pytest.mark.asyncio

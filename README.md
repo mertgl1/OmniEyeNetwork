@@ -9,9 +9,10 @@
 - Managed device, group, and port inventory with role-protected REST APIs.
 - Vault-encrypted SSH credentials; credential fields are never included in device API responses.
 - AD/LDAP authentication, JWT sessions, and `admin` / `operator` / `viewer` access roles.
-- Netmiko-based configuration snapshots, checksum versioning, history, and diffs.
-- Celery worker fan-out for bulk backups and scheduled nightly backups.
-- Hourly, read-only port/VLAN/MAC discovery with database synchronization.
+- Nornir inventory execution with bounded concurrent Netmiko sessions and per-device failure isolation.
+- Redacted configuration snapshots, checksum versioning, history, and diffs.
+- Nightly backups and daily cleanup: 30-day retention with at least 10 versions kept per device.
+- Hourly, read-only port/VLAN/MAC discovery with fixture-tested parsers for all 12 supported vendor profiles.
 - On-demand live configuration retrieval for authorized operators.
 - Vue 3 + TypeScript dashboard with inventory, port status, device enrollment, and config viewing.
 - xterm.js command console over WebSocket, restricted server-side to each vendor's predefined read-only interface, VLAN, MAC, and version commands. It is **not** an unrestricted shell.
@@ -28,11 +29,13 @@ flowchart LR
   API --> Redis[(Redis)]
   Redis --> Worker["Celery workers"]
   Beat["Celery Beat"] --> Redis
-  Worker --> Netmiko["Netmiko read-only / backup commands"]
+  Worker --> Nornir["Nornir concurrent inventory runner"]
+  API --> Nornir
+  Nornir --> Netmiko["Netmiko read-only / backup commands"]
   Netmiko --> Devices["Enrolled network devices"]
 ```
 
-The current network command implementation uses Netmiko directly. Celery distributes per-device work to the worker pool. Nornir packages remain in the dependency set for the planned inventory-runner integration; they are not currently the active execution path.
+Nornir builds an in-memory inventory from enrolled devices and decrypted credentials, then runs vendor-profile commands concurrently through the Nornir Netmiko connection plugin. `NORNIR_NUM_WORKERS` bounds each batch (default 20; maximum 100). Credentials are not written to inventory files or sent through the Celery broker.
 
 ## Requirements
 
@@ -82,9 +85,38 @@ These mock credentials are not suitable for a production environment. Production
 
 For production, set `SSH_STRICT_HOST_KEY_CHECKING=true` and configure `SSH_KNOWN_HOSTS_FILE` to a file containing the verified public host keys of the enrolled devices. The Compose stack mounts it read-only into the API and worker containers. Obtain and verify fingerprints through a trusted channel; do not trust a key merely because `ssh-keyscan` returned it. The tracked `ssh/known_hosts.example` is an empty development placeholder.
 
+### Production secrets and TLS
+
+For production, keep `.env` limited to non-secret settings and paths to secret files. Create the following files locally (the `secrets/` and `certs/` directories are ignored by Git), then set their paths in `.env`:
+
+```dotenv
+MARIADB_ROOT_PASSWORD_SECRET_FILE=./secrets/mariadb_root_password
+DB_PASSWORD_SECRET_FILE=./secrets/db_password
+VAULT_SECRET_KEY_SECRET_FILE=./secrets/vault_key
+JWT_SECRET_KEY_SECRET_FILE=./secrets/jwt_secret
+TLS_CERTIFICATE_FILE=./certs/fullchain.pem
+TLS_PRIVATE_KEY_FILE=./certs/private.key
+```
+
+The production Compose overlay mounts database, Vault, and JWT values as Compose secrets rather than environment values:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.secrets.yml up -d --build
+```
+
+To terminate TLS in the bundled Nginx service as well, add the TLS overlay and use a certificate whose SAN matches the hostname:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.secrets.yml -f docker-compose.tls.yml up -d --build
+```
+
+The bundled TLS overlay publishes HTTPS on port 443 and redirects HTTP port 80. Set `HTTPS_PORT` and `HTTP_REDIRECT_PORT` only if those host ports are available; the redirect expects the standard HTTPS port. Alternatively, use only the secrets overlay and terminate TLS at a trusted host/organization reverse proxy with the frontend at `http://127.0.0.1:3000` as its upstream. That Nginx instance proxies both `/api` and WebSocket upgrades. Do not expose the frontend's HTTP upstream publicly.
+
+For an existing database volume, the secret-file DB password must match the password already assigned to the MariaDB user; mounting a new file does not rotate that database password. Do not rotate `VAULT_SECRET_KEY` while encrypted device credentials still use the old key. Legacy backup contents are not rewritten; the report-only `GET /api/v1/backups/audit/redaction` endpoint (admin-only) reports potentially sensitive historical records without returning configuration text or secret values.
+
 ## Development and tests
 
-Backend tests use in-memory SQLite and mock device/AD behavior:
+Backend tests use in-memory SQLite, mock device/AD behavior, and sanitized synthetic command-output fixtures. They validate the Nornir/Netmiko adapter without connecting to network devices:
 
 ```powershell
 python -m pip install -r backend/requirements-dev.txt
@@ -132,11 +164,11 @@ All application API paths are under `/api/v1`.
 | Inventory | `/devices`, `/groups`, `/ports` | Reads authenticated; mutations admin |
 | Live config | `GET /devices/{id}/live-config` | Admin/operator |
 | Discovery | `POST /ports/discovery/run` | Admin/operator; queued |
-| Backups | `/backups` | History authenticated; config and diff admin/operator |
+| Backups | `/backups` | History authenticated; config and diff admin/operator; redaction audit admin |
 | Web terminal | `WS /terminal/devices/{id}` | Admin/operator; allowlisted read-only commands only |
 | Vendors | `GET /vendors` | Public catalog |
 
-Configuration snapshots may contain sensitive device data. Their full content and diffs are not available to viewers.
+New snapshots and live config responses redact common password, secret, key, community, and token directives before persistence or return. Redaction is pattern-based and is not a substitute for validating vendor-specific outputs; use lab fixtures for newly supported syntax. Legacy snapshots remain unchanged by design. The admin-only audit route returns record metadata and counts, never raw configuration values.
 
 ## Roadmap status
 
@@ -146,7 +178,7 @@ Configuration snapshots may contain sensitive device data. Their full content an
 - [x] Phase 4 — Scheduled port discovery, live config API, authenticated WebSocket command console.
 - [x] Phase 5 — Vue dashboard, xterm.js interface, Docker/Nginx integration.
 
-Follow-up work includes broader vendor-specific parsers, Nornir-based inventory execution, configuration redaction/retention policies, and deployment-specific TLS/secret management.
+Additional vendor/firmware output formats should be added with sanitized fixtures and lab verification. The 12 currently declared vendor profiles have representative parser fixtures; unsupported layouts are reported rather than treated as successful empty discovery.
 
 ## Documentation
 

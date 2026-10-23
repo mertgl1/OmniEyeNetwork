@@ -1,13 +1,12 @@
 from typing import Any, Dict, Optional
 
-from celery import group
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.core.celery_app import celery_app
 from app.core.config import settings
 from app.models.device import Device
-from app.services.port_discovery import sync_device_ports_sync
+from app.services.port_discovery import sync_device_ports_sync, sync_devices_ports_sync
 
 sync_engine = create_engine(settings.sync_database_url, pool_pre_ping=True)
 
@@ -30,16 +29,23 @@ def dispatch_port_discovery(
     group_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     with Session(sync_engine) as session:
-        query = select(Device.id).where(Device.is_active.is_(True))
+        query = select(Device).where(Device.is_active.is_(True))
         if device_id is not None:
             query = query.where(Device.id == device_id)
         if group_id is not None:
             query = query.where(Device.group_id == group_id)
-        device_ids = session.execute(query).scalars().all()
-
-    result = group(sync_device_ports_task.s(current_id) for current_id in device_ids).apply_async()
-    return {
-        "status": "dispatched",
-        "device_count": len(device_ids),
-        "group_task_id": result.id,
-    }
+        devices = session.execute(query).scalars().all()
+        discovered = sync_devices_ports_sync(session, devices)
+        failures = [
+            {"device_id": device.id, "hostname": device.hostname}
+            for device in devices
+            if device.id not in discovered
+        ]
+        return {
+            "status": "completed" if not failures else "completed_with_errors",
+            "device_count": len(devices),
+            "succeeded": len(discovered),
+            "failed": len(failures),
+            "ports_discovered": sum(discovered.values()),
+            "failures": failures,
+        }

@@ -1,4 +1,5 @@
-from typing import List
+from pathlib import Path
+from typing import Any, List, Optional
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,6 +15,7 @@ class Settings(BaseSettings):
     DB_PORT: int = 3306
     DB_USER: str = "omnieye_user"
     DB_PASSWORD: str = Field(min_length=1)
+    DB_PASSWORD_FILE: Optional[str] = Field(default=None, exclude=True, repr=False)
     DB_NAME: str = "omnieye_db"
 
     # Redis & Celery
@@ -25,7 +27,9 @@ class Settings(BaseSettings):
 
     # Security
     VAULT_SECRET_KEY: str = Field(min_length=1)
+    VAULT_SECRET_KEY_FILE: Optional[str] = Field(default=None, exclude=True, repr=False)
     SECRET_KEY: str = Field(min_length=32)
+    SECRET_KEY_FILE: Optional[str] = Field(default=None, exclude=True, repr=False)
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60, ge=1, le=1440)
     AD_MOCK_MODE: bool = False
     AD_SERVER: str = "ldaps://localhost"
@@ -38,6 +42,28 @@ class Settings(BaseSettings):
     SSH_STRICT_HOST_KEY_CHECKING: bool = False
     NETWORK_SIMULATION_MODE: str = "false"
     CELERY_TIMEZONE: str = "Europe/Istanbul"
+    NORNIR_NUM_WORKERS: int = Field(default=20, ge=1, le=100)
+    BACKUP_RETENTION_DAYS: int = Field(default=30, ge=1, le=3650)
+    BACKUP_MIN_VERSIONS: int = Field(default=10, ge=1, le=1000)
+
+    @model_validator(mode="before")
+    @classmethod
+    def load_secret_files(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+        values = values.copy()
+        for name in ("DB_PASSWORD", "VAULT_SECRET_KEY", "SECRET_KEY"):
+            file_path = values.get(f"{name}_FILE")
+            if not file_path:
+                continue
+            try:
+                secret_value = Path(file_path).read_text(encoding="utf-8").rstrip("\r\n")
+            except OSError as exc:
+                raise ValueError(f"Unable to read the configured {name}_FILE.") from exc
+            if not secret_value:
+                raise ValueError(f"The configured {name}_FILE is empty.")
+            values[name] = secret_value
+        return values
 
     @model_validator(mode="after")
     def validate_production_security(self):

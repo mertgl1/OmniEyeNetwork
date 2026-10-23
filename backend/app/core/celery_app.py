@@ -27,6 +27,10 @@ celery_app.conf.update(
             "task": "app.tasks.port_discovery_tasks.dispatch_port_discovery",
             "schedule": crontab(minute=0),
         },
+        "daily-expired-backup-retention": {
+            "task": "app.tasks.backup_tasks.prune_expired_backups_task",
+            "schedule": crontab(hour=4, minute=0),
+        },
     },
 )
 

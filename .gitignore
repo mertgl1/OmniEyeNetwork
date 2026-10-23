@@ -57,6 +57,10 @@ frontend/dist/
 frontend/.next/
 ssh/known_hosts
 backend/celerybeat-schedule*
+secrets/
+certs/
+*.pem
+*.key
 
 # OS files
 .DS_Store

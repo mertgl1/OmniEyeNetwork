@@ -16,6 +16,10 @@ from app.schemas.config_backup import (
     DiffResponse,
 )
 from app.services.automation_engine import automation_engine
+from app.services.config_redaction import (
+    count_unredacted_secret_lines,
+    redact_configuration,
+)
 from app.services.diff_service import calculate_sha256, generate_config_diff
 from app.tasks.backup_tasks import backup_all_devices
 import logging
@@ -48,6 +52,7 @@ async def trigger_device_backup(
             detail="Unable to retrieve configuration from the device.",
         )
 
+    config_text, _redacted_lines = redact_configuration(config_text)
     checksum = calculate_sha256(config_text)
 
     # Check previous latest backup
@@ -125,6 +130,45 @@ async def list_device_backup_history(
     )
     result = await db.execute(query)
     return result.scalars().all()
+
+
+@router.get("/audit/redaction")
+async def audit_legacy_backup_redaction(
+    limit: int = Query(100, ge=1, le=500),
+    before_id: Optional[int] = Query(None, ge=1),
+    current_user=Depends(require_role(["admin"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Report potentially unredacted legacy backups without returning their content."""
+    query = (
+        select(ConfigBackup, Device.hostname)
+        .join(Device, ConfigBackup.device_id == Device.id)
+        .order_by(ConfigBackup.id.desc())
+        .limit(limit)
+    )
+    if before_id is not None:
+        query = query.where(ConfigBackup.id < before_id)
+    rows = (await db.execute(query)).all()
+    findings = []
+    for backup, hostname in rows:
+        finding_count = count_unredacted_secret_lines(backup.config_text)
+        if finding_count:
+            findings.append(
+                {
+                    "backup_id": backup.id,
+                    "device_id": backup.device_id,
+                    "hostname": hostname,
+                    "version": backup.version,
+                    "created_at": backup.created_at,
+                    "potential_secret_lines": finding_count,
+                }
+            )
+    return {
+        "scanned": len(rows),
+        "flagged_count": len(findings),
+        "findings": findings,
+        "next_before_id": rows[-1][0].id if len(rows) == limit else None,
+    }
 
 
 @router.get("/{backup_id}", response_model=ConfigBackupResponse)

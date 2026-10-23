@@ -1,0 +1,86 @@
+{
+  "cisco_ios": {
+    "interfaces": "Interface IP-Address OK? Method Status Protocol\nGigabitEthernet1/0/1 unassigned YES unset up up\n",
+    "vlans": "VLAN Name Status Ports\n10 USERS active Gi1/0/1\n",
+    "macs": "Vlan Mac Address Type Ports\n10 001a.2b3c.4d5e DYNAMIC Gi1/0/1\n",
+    "port": "GigabitEthernet1/0/1",
+    "mac": "001a.2b3c.4d5e"
+  },
+  "cisco_nxos": {
+    "interfaces": "Port VRF Status IP Address Speed\nEth1/1 default up 192.0.2.1 10G\n",
+    "vlans": "VLAN Name Status Ports\n10 users active Eth1/1\n",
+    "macs": "Vlan Mac Address Type Ports\n10 001a.2b3c.4d5e dynamic Eth1/1\n",
+    "port": "Eth1/1",
+    "mac": "001a.2b3c.4d5e"
+  },
+  "cisco_xr": {
+    "interfaces": "Interface IP-Address Status Protocol\nGi0/0/0/0 192.0.2.2 Up Up\n",
+    "vlans": "VLAN Name Status Ports\n10 users active Gi0/0/0/0\n",
+    "macs": "Vlan Mac Address Type Ports\n10 001a.2b3c.4d5e dynamic Gi0/0/0/0\n",
+    "port": "Gi0/0/0/0",
+    "mac": "001a.2b3c.4d5e"
+  },
+  "huawei_vrp": {
+    "interfaces": "Interface PHY Protocol InUti OutUti\nGE0/0/1 up up 0% 0%\n",
+    "vlans": "VID Name Status Ports\n10 users enable GE0/0/1\n",
+    "macs": "VLAN MAC Address Type Interface\n10 001a-2b3c-4d5e dynamic GE0/0/1\n",
+    "port": "GE0/0/1",
+    "mac": "001a-2b3c-4d5e"
+  },
+  "aruba_os": {
+    "interfaces": "Port Native Mode Type Enabled Status Reason Speed\n1/1/1 1 access 1/1/1 yes up 1G\n",
+    "vlans": "VLAN Name Status Ports\n10 users up 1/1/1\n",
+    "macs": "Vlan Mac Address Type Port\n10 00:1a:2b:3c:4d:5e dynamic 1/1/1\n",
+    "port": "1/1/1",
+    "mac": "00:1a:2b:3c:4d:5e"
+  },
+  "hp_procurve": {
+    "interfaces": "Port Type Enabled Status Mode\n1 100/1000T Yes Up 10FDx\n",
+    "vlans": "VLAN Name Status Ports\n10 users Port-based 1\n",
+    "macs": "VLAN MAC Address Port\n10 00-1a-2b-3c-4d-5e 1\n",
+    "port": "1",
+    "mac": "00-1a-2b-3c-4d-5e"
+  },
+  "hp_comware": {
+    "interfaces": "Interface PHY Protocol InUti OutUti\nGE1/0/1 UP UP 0% 0%\n",
+    "vlans": "VLAN ID Name Status Ports\n10 users active GE1/0/1\n",
+    "macs": "VLAN MAC Address Type Port\n10 001a-2b3c-4d5e dynamic GE1/0/1\n",
+    "port": "GE1/0/1",
+    "mac": "001a-2b3c-4d5e"
+  },
+  "juniper_junos": {
+    "interfaces": "Interface Admin Link Proto Local Remote\nge-0/0/1 up up eth-switch\n",
+    "vlans": "Name Tag Interfaces\nusers 10 ge-0/0/1\n",
+    "macs": "VLAN MAC flags interface\n10 00:1a:2b:3c:4d:5e D ge-0/0/1\n",
+    "port": "ge-0/0/1",
+    "mac": "00:1a:2b:3c:4d:5e"
+  },
+  "dell_os10": {
+    "interfaces": "Port Description Status Vlan Duplex Speed\nEth 1/1/1 uplink up 10 full 10G\n",
+    "vlans": "VLAN Name Status Ports\n10 users active Eth1/1/1\n",
+    "macs": "Vlan Mac Address Type Ports\n10 001a.2b3c.4d5e dynamic Eth1/1/1\n",
+    "port": "Eth1/1/1",
+    "mac": "001a.2b3c.4d5e"
+  },
+  "extreme_exos": {
+    "interfaces": "Port Name Status Vlan\n1:1 uplink Up 10\n",
+    "vlans": "VLAN Name Status Ports\n10 users active 1:1\n",
+    "macs": "Vlan Mac Address Type Port\n10 00:1a:2b:3c:4d:5e dynamic 1:1\n",
+    "port": "1:1",
+    "mac": "00:1a:2b:3c:4d:5e"
+  },
+  "mikrotik_routeros": {
+    "interfaces": "0 name=ether1 type=ether running=yes disabled=no\n",
+    "vlans": ";;; users\n0 bridge=bridge1 vlan-ids=10 tagged=bridge1 untagged=ether1\n",
+    "macs": "0 mac-address=001a.2b3c.4d5e on-interface=ether1 vid=10\n",
+    "port": "ether1",
+    "mac": "001a.2b3c.4d5e"
+  },
+  "fortinet": {
+    "interfaces": "== [ port1 ]\nname: port1\nlink: up\n",
+    "vlans": "VLAN Name Status Ports\n10 users active port1\n",
+    "macs": "10 port1 00:1a:2b:3c:4d:5e dynamic\n",
+    "port": "port1",
+    "mac": "00:1a:2b:3c:4d:5e"
+  }
+}

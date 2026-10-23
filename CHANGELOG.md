@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+- Nornir-backed in-memory inventory execution with bounded concurrent Netmiko sessions for backup and port-discovery batches.
+- Sanitized fixture coverage for interface/VLAN/MAC parsing across all 12 declared vendor profiles; unsupported layouts are reported explicitly.
+- Secret redaction before new backup persistence/checksum calculation and before returning live configurations.
+- Admin-only, paginated legacy-backup redaction audit that returns metadata/counts without configuration contents.
+- Daily backup retention with a 30-day age threshold and a minimum of 10 retained versions per device.
+- Optional Docker Compose secret-file and bundled Nginx TLS overlays, with external reverse-proxy TLS deployment also supported.
+- Alembic index for per-device backup retention queries.
+
+### Security
+- Production secret values can be read from mounted Compose secret files instead of environment values.
+- TLS mode uses TLS 1.2/1.3, read-only certificate/key secrets, HTTP-to-HTTPS redirect, HSTS, and the existing restrictive frontend security headers.
+- Existing snapshots are not modified by the audit or retention feature unless they meet the explicit age/minimum-version deletion policy.
+
+### Changed
+- Bulk backup and port-discovery work is executed as multi-device Nornir batches rather than one Celery child task per device.
+- Docker Compose exposes bounded Nornir and configurable retention settings to the API and worker services.
+
 ## [0.5.0] - 2026-10-23
 
 ### Added
