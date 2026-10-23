@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [0.5.0] - 2026-10-23
+
+### Added
+- **Phase 4 network inventory synchronization**:
+  - Hourly Celery Beat port/VLAN/MAC discovery and per-device worker tasks.
+  - Read-only vendor command output parsing and database upsert for discovered ports.
+  - `POST /api/v1/ports/discovery/run` for authorized discovery dispatch.
+  - `GET /api/v1/devices/{id}/live-config` for on-demand live configuration.
+- **Phase 5 Vue management console**:
+  - Vue 3 + TypeScript + Vite + Tailwind 4 single-page application.
+  - Login, role-aware device/group dashboard, port status view, device enrollment, and live configuration display.
+  - xterm.js WebSocket console restricted to vendor-profile read-only interface/VLAN/MAC/version commands.
+- **Docker services and operations**:
+  - Frontend/Nginx container with API and WebSocket proxying.
+  - Celery Beat service with nightly backup and hourly discovery schedules.
+  - Alembic baseline migration for empty and existing SQLAlchemy-created databases.
+
+### Security
+- Protected inventory and backup routes with current-user and role checks; restricted backup payload and diff access to admins/operators.
+- Rechecked the current DB role against each JWT and invalidated tokens after role changes.
+- Replaced new local password hashes with PBKDF2-HMAC-SHA256 and upgrade legacy hashes on login.
+- Escaped LDAP search filters, enabled LDAPS certificate validation, and made mock AD opt-in outside the development template.
+- Removed fabricated-success fallback after a failed SSH connection; simulation is now explicit.
+- Added production startup validation, frontend security headers, loopback-only service bindings, and a critical warning for legacy development Vault-key derivation.
+
+### Changed
+- Bulk backups now dispatch per-device Celery tasks instead of performing network I/O inside the API request.
+- Updated README and architecture documentation to match implemented APIs, role boundaries, schedules, frontend, and deployment requirements.
+- Corrected group deletion behavior so devices are detached rather than deleted.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added

@@ -1,192 +1,159 @@
-# 🌐 OmniEyeNetwork
+# OmniEyeNetwork
 
-> **Enterprise Network Management, Multi-Vendor Automation & Web SSH Platform**
+**OmniEyeNetwork** is a self-hosted network inventory and operations platform for managed switches and routers. It combines a FastAPI backend, MariaDB, Redis/Celery workers, and a Vue 3 web console.
 
-[![Tests](https://img.shields.io/badge/tests-23%20passed-brightgreen.svg)](backend/tests/)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com/)
-[![Docker](https://img.shields.io/badge/docker-ready-2496ED.svg)](docker-compose.yml)
-[![Changelog](https://img.shields.io/badge/changelog-v0.3.0-orange.svg)](CHANGELOG.md)
+> The application is under active development. Validate vendor commands and security settings in a lab before connecting production devices.
 
-OmniEyeNetwork, kurumsal heterojen ağ altyapılarını yönetmek, switch/router konfigürasyonlarını otomatik olarak yedeklemek, port ve VLAN durumlarını hibrit yaklaşımla anlık izlemek ve tarayıcı üzerinden tek tıkla güvenli Web SSH bağlantısı sağlamak amacıyla geliştirilmiş yeni nesil bir ağ otomasyon platformudur.
+## Features
 
----
+- Managed device, group, and port inventory with role-protected REST APIs.
+- Vault-encrypted SSH credentials; credential fields are never included in device API responses.
+- AD/LDAP authentication, JWT sessions, and `admin` / `operator` / `viewer` access roles.
+- Netmiko-based configuration snapshots, checksum versioning, history, and diffs.
+- Celery worker fan-out for bulk backups and scheduled nightly backups.
+- Hourly, read-only port/VLAN/MAC discovery with database synchronization.
+- On-demand live configuration retrieval for authorized operators.
+- Vue 3 + TypeScript dashboard with inventory, port status, device enrollment, and config viewing.
+- xterm.js command console over WebSocket, restricted server-side to each vendor's predefined read-only interface, VLAN, MAC, and version commands. It is **not** an unrestricted shell.
 
-## 🏗️ Mimari & Teknoloji Yığını (Tech Stack)
+## Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Frontend["Frontend (Vue 3 / React + Tailwind + xterm.js)"]
-        UI["Web Dashboard & Port Viewer"]
-        Terminal["Web SSH Terminal (xterm.js)"]
-    end
-
-    subgraph Backend["Backend (FastAPI + Async Python)"]
-        API["REST API (FastAPI)"]
-        WS["WebSocket Server (SSH Bridge)"]
-        Vault["Vault Engine (AES-256)"]
-        Auth["Active Directory / LDAP & RBAC"]
-        Registry["Multi-Vendor Command Registry"]
-    end
-
-    subgraph CoreEngine["Automation Core (Nornir + Netmiko)"]
-        Worker["Celery Background Workers"]
-        Scheduler["Celery Beat (Nightly 03:00 Backup)"]
-        Engine["Network Automation Engine"]
-        DiffEngine["Diff & Versioning Engine (SHA-256)"]
-    end
-
-    subgraph DataStorage["Data & Caching"]
-        DB[(MariaDB 11.4 - UTF8MB4)]
-        Redis[(Redis 7.2 - Queue & Cache)]
-    end
-
-    subgraph NetworkDevices["Kurumsal Ağ Donanımları"]
-        CiscoDev["Cisco (IOS, NX-OS, XR)"]
-        HuaweiDev["Huawei (VRP CloudEngine/S5700)"]
-        ArubaDev["Aruba (ArubaOS-CX)"]
-        HpeDev["HPE (ProCurve, Comware)"]
-        JuniperDev["Juniper (JunOS EX/QFX)"]
-        OtherDev["Dell / Extreme / Mikrotik / Fortinet"]
-    end
-
-    UI -->|REST API| API
-    Terminal <-->|WebSocket| WS
-    API --> Auth
-    API --> Vault
-    API --> Registry
-    API <--> DB
-    API <--> Redis
-    WS <-->|Decrypt via Vault| Vault
-    WS <-->|SSH PTY Session| NetworkDevices
-    Worker <--> DB
-    Worker <--> Redis
-    Worker --> Engine
-    Engine --> DiffEngine
-    DiffEngine --> DB
-    Engine <--> CiscoDev
-    Engine <--> HuaweiDev
-    Engine <--> ArubaDev
-    Engine <--> HpeDev
-    Engine <--> JuniperDev
-    Engine <--> OtherDev
+flowchart LR
+  Browser["Vue 3 + xterm.js"] -->|HTTP / WebSocket| Nginx["Frontend / Nginx"]
+  Nginx --> API["FastAPI"]
+  API --> Auth["AD/LDAP + JWT + RBAC"]
+  API --> Vault["Fernet Vault"]
+  API --> DB[(MariaDB)]
+  API --> Redis[(Redis)]
+  Redis --> Worker["Celery workers"]
+  Beat["Celery Beat"] --> Redis
+  Worker --> Netmiko["Netmiko read-only / backup commands"]
+  Netmiko --> Devices["Enrolled network devices"]
 ```
 
-- **Mimari Detayları ve ERD Şeması:** 📄 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- **Sürüm Geçmişi ve Notları:** 📄 [CHANGELOG.md](CHANGELOG.md)
+The current network command implementation uses Netmiko directly. Celery distributes per-device work to the worker pool. Nornir packages remain in the dependency set for the planned inventory-runner integration; they are not currently the active execution path.
 
----
+## Requirements
 
-## 🏛️ Desteklenen Çoklu Üretici (Multi-Vendor) Komut Matrisi
+- Docker Desktop with Docker Compose v2
+- Python 3.11+ and Node.js 22+ only if running tests or the frontend outside Docker
+- Management network reachability and verified SSH host keys for live-device operations
 
-OmniEyeNetwork, üretici bağımsız (vendor-neutral) bir mimariye sahiptir. Her donanım ailesi için doğru CLI sözdizimi otomatik çözümlenir:
+## Quick start (PowerShell)
 
-| Üretici (Vendor) | Desteklenen Seri / Modeller | Netmiko `device_type` | Running-Config Komutu | VLAN Komutu | MAC Adres Tablosu |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Cisco IOS / XE** | Catalyst 2960, 3850, 9200, 9300, 9500, ISR 4000 | `cisco_ios` | `show running-config` | `show vlan brief` | `show mac address-table` |
-| **Cisco NX-OS** | Nexus 3000, 5000, 7000, 9000 (Data Center) | `cisco_nxos` | `show running-config` | `show vlan` | `show mac address-table` |
-| **Cisco IOS-XR** | ASR 9000, NCS 5500 | `cisco_xr` | `show running-config` | `show vlan` | `show l2vpn mac-learning` |
-| **Huawei VRP** | CloudEngine 6800/8800/12800, S5700, S6700, AR | `huawei_vrp` | `display current-configuration` | `display vlan` | `display mac-address` |
-| **ArubaOS-CX** | CX 6000, 6100, 6200, 6300, 8320 | `aruba_os` | `show running-config` | `show vlan` | `show mac-address` |
-| **HPE ProCurve** | ProCurve 2530, 2920, 2930F, 5400R zl2 | `hp_procurve` | `show running-config` | `show vlans` | `show mac-address` |
-| **HPE Comware** | FlexFabric 5900, 5940, 12500, H3C S5500 | `hp_comware` | `display current-configuration` | `display vlan all` | `display mac-address` |
-| **Juniper JunOS** | EX2300, EX3400, EX4300, QFX5100, SRX | `juniper_junos` | `show configuration` | `show vlans` | `show ethernet-switching table` |
-| **Dell OS10** | PowerSwitch S4100, S5200, Z9264F | `dell_os10` | `show running-configuration` | `show vlan` | `show mac-address-table` |
-| **Extreme EXOS** | Summit X440, X460, X670 | `extreme_exos` | `show configuration` | `show vlan` | `show fdb` |
-| **MikroTik** | RouterOS & Cloud Router Switches (CRS) | `mikrotik_routeros` | `/export verbose` | `/interface bridge vlan print` | `/interface bridge host print` |
-| **Fortinet** | FortiSwitch 124/248/448, FortiOS | `fortinet` | `show full-configuration` | `diagnose switch vlan list` | `diagnose switch mac-address list`|
+1. Create the environment file:
 
----
+   ```powershell
+   Copy-Item .env.example .env
+   ```
 
-## 🗺️ Geliştirme Yol Haritası (Roadmap)
+2. Generate fresh keys and set them in `.env`:
 
-- [x] **Faz 1: Temel Altyapı ve Veritabanı (Kurulum Aşaması)**
-  - [x] Docker & Docker Compose ortamı (`FastAPI`, `MariaDB`, `Redis`, `Celery Worker`).
-  - [x] Veritabanı modelleri (`Device`, `DeviceGroup`, `Port`, `ConfigBackup`, `User`).
-  - [x] FastAPI REST CRUD API uçları (`/devices`, `/groups`, `/ports`, `/health`).
-  - [x] Alembic veritabanı migrasyon yapısı.
-- [x] **Faz 2: Güvenlik, AD Entegrasyonu ve Kasa (Vault) Yapısı**
-  - [x] Active Directory / LDAP kimlik doğrulama servisi (`app/core/ldap.py`).
-  - [x] Kurumsal grup eşleme ile RBAC rolleri (`admin`, `operator`, `viewer`).
-  - [x] JWT oturum yönetimi (`/api/v1/auth/login`, `/me`, `/roles`).
-  - [x] AES-256 Vault şifreleme/çözme motoru (`app/core/vault.py`).
-  - [x] Cihaz şifrelerinin AES-256 ile şifrelenerek DB'ye saklanması.
-- [x] **Faz 3: Ağ Otomasyonu, Çoklu Üretici ve Yedekleme (Core Engine)**
-  - [x] 12 farklı üretici ailesini kapsayan `VendorProfileRegistry` komut matrisi.
-  - [x] Netmiko / SSH tabanlı çoklu üretici konfigürasyon çekme motoru (`automation_engine.py`).
-  - [x] SHA-256 Checksum ile akıllı tekilleştirme (aynı konfigürasyonda mükerrer kayıt engeli).
-  - [x] Satır bazlı Unix Unified Diff motoru (`diff_service.py`).
-  - [x] Celery asenkron yedekleme görevleri ve Celery Beat gece yedekleme takvimi.
-  - [x] Yedekleme tetikleme, geçmiş inceleme ve Diff karşılaştırma REST API uçları (`/api/v1/backups`).
-  - [x] Desteklenen üretici/model kataloğu API ucu (`/api/v1/vendors`).
-  - [x] Kapsamlı otomatik test paketi (**23/23 test başarılı**).
-- [ ] **Faz 4: Veri Zenginleştirme ve Anlık İletişim**
-  - [ ] Port/VLAN/MAC periyodik keşif ve senkronizasyon servisi.
-  - [ ] Anlık `show running-config` API uçları.
-  - [ ] WebSocket altyapısı.
-- [ ] **Faz 5: Kullanıcı Arayüzü (Frontend) & Web Terminal**
-  - [ ] Modern Dashboard, Switch görselleştirme ve Port Matrisi.
-  - [ ] `xterm.js` Web SSH Entegrasyonu.
+   ```powershell
+   python -c "import base64,secrets; print(base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())"
+   python -c "import secrets; print(secrets.token_urlsafe(48))"
+   ```
 
----
+   Use the first value for `VAULT_SECRET_KEY`, the second for `SECRET_KEY`, and replace both database passwords. Do not commit `.env`. For local UI development, `.env.example` enables mock AD and network simulation; set both to `false` when testing real devices.
 
-## 🧪 Testleri Çalıştırma
+3. Start or update the complete stack:
 
-Tüm birim ve entegrasyon testlerini hiçbir dış bağımlılık gerekmeden (SQLite bellek içi motoru ile) anında çalıştırmak için:
+   ```powershell
+   docker compose up -d --build
+   docker compose ps
+   ```
 
-```bash
-python -m pytest backend/tests -v
+   Database and Redis data are stored in named volumes. Do not use `docker compose down -v` unless you intentionally want to delete this data.
+
+4. Open the dashboard at [http://localhost:3000](http://localhost:3000). Development API docs are at [http://localhost:8000/docs](http://localhost:8000/docs).
+
+When `AD_MOCK_MODE=true`, local-only test accounts are available:
+
+| User | Password | Role |
+|---|---|---|
+| `admin` | `admin123` | admin |
+| `operator` | `operator123` | operator |
+| `viewer` | `viewer123` | viewer |
+
+These mock credentials are not suitable for a production environment. Production startup rejects mock AD, debug mode, weak signing keys, invalid Fernet keys, and disabled SSH host-key checking.
+
+### SSH host-key verification
+
+For production, set `SSH_STRICT_HOST_KEY_CHECKING=true` and configure `SSH_KNOWN_HOSTS_FILE` to a file containing the verified public host keys of the enrolled devices. The Compose stack mounts it read-only into the API and worker containers. Obtain and verify fingerprints through a trusted channel; do not trust a key merely because `ssh-keyscan` returned it. The tracked `ssh/known_hosts.example` is an empty development placeholder.
+
+## Development and tests
+
+Backend tests use in-memory SQLite and mock device/AD behavior:
+
+```powershell
+python -m pip install -r backend/requirements-dev.txt
+python -m pytest backend/tests -q
 ```
 
-Çıktı özeti:
-```text
-backend/tests/test_api_endpoints.py::test_auth_login_ad_mock PASSED      [  4%]
-backend/tests/test_api_endpoints.py::test_auth_login_invalid PASSED      [  8%]
-backend/tests/test_api_endpoints.py::test_auth_roles_list PASSED         [ 13%]
-backend/tests/test_api_endpoints.py::test_device_groups_crud PASSED      [ 17%]
-backend/tests/test_api_endpoints.py::test_devices_and_ports_crud PASSED  [ 21%]
-backend/tests/test_backup_and_diff.py::test_sha256_calculation PASSED    [ 26%]
-backend/tests/test_backup_and_diff.py::test_unified_diff_generation PASSED [ 30%]
-backend/tests/test_backup_and_diff.py::test_unified_diff_identical PASSED [ 34%]
-backend/tests/test_backup_and_diff.py::test_vendor_api_endpoints PASSED  [ 39%]
-backend/tests/test_backup_and_diff.py::test_backup_and_diff_flow PASSED  [ 43%]
-backend/tests/test_ldap_auth.py::test_ldap_authentication_admin PASSED   [ 47%]
-backend/tests/test_ldap_auth.py::test_ldap_authentication_operator PASSED [ 52%]
-backend/tests/test_ldap_auth.py::test_ldap_authentication_viewer PASSED  [ 56%]
-backend/tests/test_ldap_auth.py::test_ldap_authentication_invalid_password PASSED [ 60%]
-backend/tests/test_ldap_auth.py::test_password_hashing PASSED            [ 65%]
-backend/tests/test_ldap_auth.py::test_jwt_token_flow PASSED              [ 69%]
-backend/tests/test_vault.py::test_vault_encryption_and_decryption PASSED [ 73%]
-backend/tests/test_vault.py::test_vault_empty_credentials PASSED         [ 78%]
-backend/tests/test_vault.py::test_vault_tampered_ciphertext PASSED       [ 82%]
-backend/tests/test_vault.py::test_vault_custom_key_generation PASSED     [ 86%]
-backend/tests/test_vendor_profiles.py::test_all_vendor_profiles_configured PASSED [ 91%]
-backend/tests/test_vendor_profiles.py::test_vendor_heuristic_resolution PASSED [ 95%]
-backend/tests/test_vendor_profiles.py::test_list_supported_vendors PASSED [100%]
+Frontend development server and production checks:
 
-============================= 23 passed in 0.83s ==============================
+```powershell
+npm.cmd install --prefix frontend
+npm.cmd run dev --prefix frontend
+npm.cmd run build --prefix frontend
+npm.cmd audit --prefix frontend
 ```
 
----
+For the running container stack, rebuild and check service health:
 
-## 🚀 Hızlı Başlangıç (Docker ile Çalıştırma)
-
-```bash
-# 1. Ortam değişkenlerini hazırlayın:
-cp .env.example .env
-
-# 2. Container'ları başlatın:
+```powershell
 docker compose up -d --build
+docker compose ps
 ```
 
-### Servis Erişim Noktaları:
-- **Swagger API Dokümantasyonu:** [http://localhost:8000/docs](http://localhost:8000/docs)
-- **ReDoc Dokümantasyonu:** [http://localhost:8000/redoc](http://localhost:8000/redoc)
-- **Sistem Sağlık Ucu:** [http://localhost:8000/api/v1/health](http://localhost:8000/api/v1/health)
-- **Çoklu Üretici Kataloğu:** [http://localhost:8000/api/v1/vendors](http://localhost:8000/api/v1/vendors)
-- **Yedekleme & Diff Uçları:** [http://localhost:8000/api/v1/backups](http://localhost:8000/api/v1/backups)
+The frontend is served by Nginx, which proxies `/api` and WebSocket upgrades to FastAPI. Database and Redis ports are bound to loopback by default; the API and dashboard are also local-only by default.
 
----
+## Authentication and permissions
 
-## 📄 Lisans
-Bu proje [MIT](LICENSE) lisansı ile lisanslanmıştır.
+AD group-to-role mapping is configurable through `.env`:
+
+| Role | Access |
+|---|---|
+| `admin` | Inventory/group/port writes, backups, live config, and read-only terminal |
+| `operator` | Inventory reads, backup triggers, live config, port discovery, and read-only terminal |
+| `viewer` | Inventory and port reads plus backup history; raw config and diffs are restricted |
+
+The backend rechecks a user's current database role on every request; role changes invalidate older tokens. Browser sessions use tab-scoped `sessionStorage`. WebSocket authentication sends the JWT as the first frame rather than placing it in a URL. Terminal commands are checked against the selected vendor profile on the server.
+
+## API overview
+
+All application API paths are under `/api/v1`.
+
+| Area | Routes | Access |
+|---|---|---|
+| Health | `GET /health` | Public, minimal status only |
+| Auth | `POST /auth/login`, `GET /auth/me`, `GET /auth/roles` | Login public; profile authenticated |
+| Inventory | `/devices`, `/groups`, `/ports` | Reads authenticated; mutations admin |
+| Live config | `GET /devices/{id}/live-config` | Admin/operator |
+| Discovery | `POST /ports/discovery/run` | Admin/operator; queued |
+| Backups | `/backups` | History authenticated; config and diff admin/operator |
+| Web terminal | `WS /terminal/devices/{id}` | Admin/operator; allowlisted read-only commands only |
+| Vendors | `GET /vendors` | Public catalog |
+
+Configuration snapshots may contain sensitive device data. Their full content and diffs are not available to viewers.
+
+## Roadmap status
+
+- [x] Phase 1 — Docker foundation, MariaDB models, CRUD API, Alembic baseline.
+- [x] Phase 2 — AD/LDAP, JWT/RBAC, Vault credential encryption.
+- [x] Phase 3 — Multi-vendor Netmiko profiles, configuration versioning/diff, Celery backup tasks.
+- [x] Phase 4 — Scheduled port discovery, live config API, authenticated WebSocket command console.
+- [x] Phase 5 — Vue dashboard, xterm.js interface, Docker/Nginx integration.
+
+Follow-up work includes broader vendor-specific parsers, Nornir-based inventory execution, configuration redaction/retention policies, and deployment-specific TLS/secret management.
+
+## Documentation
+
+- [System architecture and security model](docs/ARCHITECTURE.md)
+- [Changelog](CHANGELOG.md)
+- [Environment template](.env.example)
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

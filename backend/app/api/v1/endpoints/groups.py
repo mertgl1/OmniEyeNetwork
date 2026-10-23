@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_role
 from app.core.database import get_db
 from app.models.device_group import DeviceGroup
 from app.schemas.device_group import DeviceGroupCreate, DeviceGroupResponse, DeviceGroupUpdate
@@ -14,6 +15,7 @@ router = APIRouter()
 async def list_groups(
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    current_user=Depends(require_role(["admin", "operator", "viewer"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Retrieve all device groups."""
@@ -24,6 +26,7 @@ async def list_groups(
 @router.post("", response_model=DeviceGroupResponse, status_code=status.HTTP_201_CREATED)
 async def create_group(
     group_in: DeviceGroupCreate,
+    current_user=Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Create a new device group."""
@@ -44,6 +47,7 @@ async def create_group(
 @router.get("/{group_id}", response_model=DeviceGroupResponse)
 async def get_group(
     group_id: int,
+    current_user=Depends(require_role(["admin", "operator", "viewer"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Get device group details by ID."""
@@ -60,6 +64,7 @@ async def get_group(
 async def update_group(
     group_id: int,
     group_in: DeviceGroupUpdate,
+    current_user=Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Update a device group."""
@@ -90,6 +95,7 @@ async def update_group(
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(
     group_id: int,
+    current_user=Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a device group."""

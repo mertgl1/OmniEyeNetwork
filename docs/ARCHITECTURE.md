@@ -1,200 +1,160 @@
-# 🏛️ OmniEyeNetwork Architecture & System Specifications
+# OmniEyeNetwork — Architecture and Security
 
-> **Versiyon:** 1.0.0 (Faz 1 & Faz 2 Tamamlandı)  
-> **Durum:** Aktif Geliştirme
+**Version:** 0.5.0
+**Status:** Active development
 
----
+## 1. System overview
 
-## 1. Genel Bakış & Hedefler
-
-OmniEyeNetwork; heterojen kurumsal ağ altyapılarında (Cisco, Huawei, Aruba, Juniper vb.) çalışan yüzlerce switch ve router'ın:
-1. **Envanter ve Port Takibini** (VLAN, MAC, Up/Down, Speed) veritabanı önbelleği ile gecikmesiz sunan,
-2. **Kritik Konfigürasyonlarını** (running-config) Nornir tabanlı eşzamanlı Python motoru ile otomatik yedekleyen ve versiyonlayan,
-3. **Cihaz Parolalarını** veritabanında AES-256 şifreli Vault yapısında koruyan,
-4. **Active Directory / LDAP** entegrasyonu ile Rol Bazlı Erişim Kontrolü (RBAC) sağlayan,
-5. Tarayıcıdan tek tıkla cihazın şifresini operatöre göstermeden güvenli **Web SSH Terminali (xterm.js)** açan,
-
-uçtan uca entegre ve kurumsal düzeyde bir ağ yönetim platformudur.
-
----
-
-## 2. Sistem Mimarisi & Servisler
+OmniEyeNetwork contains a Vue 3 single-page application, FastAPI API, MariaDB persistence layer, Redis broker, Celery worker pool, and Celery Beat scheduler. The frontend's Nginx container serves static assets and proxies API and WebSocket traffic to the backend.
 
 ```mermaid
 flowchart TB
-    subgraph ClientTier["Kullanıcı Katmanı (Frontend)"]
-        Browser["Modern Web UI (Vue 3 / React + Tailwind CSS)"]
-        WebSSH["xterm.js Web Terminal"]
-    end
-
-    subgraph APITier["Uygulama & API Katmanı (FastAPI)"]
-        REST["REST API Engine (/api/v1)"]
-        AuthModule["Auth & RBAC Service (AD/LDAP + JWT)"]
-        VaultModule["Vault Cryptography Engine (AES-256)"]
-        WSServer["WebSocket Bridge Server"]
-    end
-
-    subgraph AutomationTier["Otomasyon & Arka Plan (Celery + Nornir)"]
-        CeleryWorker["Celery Worker Engine"]
-        CeleryBeat["Celery Beat (Zamanlanmış Görevler)"]
-        NornirCore["Nornir Concurrent Runner"]
-        NetmikoDrivers["Netmiko Multi-Vendor Drivers"]
-    end
-
-    subgraph PersistenceTier["Veri & Kuyruk Katmanı"]
-        MariaDB[(MariaDB 11.4 - UTF8MB4)]
-        Redis[(Redis 7.2 - Cache & Broker)]
-    end
-
-    subgraph NetworkTier["Fiziksel / Sanal Ağ Cihazları"]
-        CoreSW["Omurga Switch'ler (Core/Distribution)"]
-        AccessSW["Kenar Switch'ler (Access Layer)"]
-        Routers["Router & Güvenlik Duvarları"]
-    end
-
-    Browser -->|HTTPS / REST API| REST
-    WebSSH <-->|WSS (WebSockets)| WSServer
-    REST --> AuthModule
-    REST --> VaultModule
-    REST <--> MariaDB
-    REST <--> Redis
-
-    WSServer --> VaultModule
-    WSServer <-->|SSH (PTY Stream)| NetworkTier
-
-    CeleryBeat -->|Zamanlanmış Backup| Redis
-    Redis --> CeleryWorker
-    CeleryWorker --> MariaDB
-    CeleryWorker --> NornirCore
-    NornirCore --> NetmikoDrivers
-    NetmikoDrivers <-->|SSH / CLI Scrape| NetworkTier
+  Browser["Vue 3 + TypeScript + xterm.js"] --> Nginx["Nginx"]
+  Nginx --> API["FastAPI REST / WebSocket"]
+  API --> LDAP["AD/LDAP + JWT + RBAC"]
+  API --> Vault["Fernet Vault"]
+  API --> MariaDB[(MariaDB)]
+  API --> Redis[(Redis)]
+  Beat["Celery Beat"] --> Redis
+  Redis --> Worker["Celery worker pool"]
+  Worker --> Netmiko["Netmiko"]
+  API --> Netmiko
+  Netmiko --> Device["Enrolled devices"]
 ```
 
----
+Network operations use Netmiko and vendor profiles. Celery tasks fan out work by device across workers. Nornir is present as a dependency but is not currently used by the execution engine.
 
-## 3. Güvenlik & Kasa (Vault) Mimarisi
-
-### 3.1 AES-256 Fernet Şifreleme
-- Cihazlara ait SSH kullanıcı adı, şifresi ve `enable_secret` parolaları **kesinlikle açık metin olarak veritabanına yazılmaz**.
-- Parolalar, 256-bit AES şifreleme ve PBKDF2HMAC (SHA-256) ile türetilen simetrik Fernet anahtarı ile şifrelenir (`app.core.vault.VaultEngine`).
-- Kullanıcı API üzerinden cihaz bilgilerini sorguladığında şifreler DTO yanıtlarında (`DeviceResponse`) asla yer almaz.
-- Şifre sadece sistem arka planında Web SSH bağlantısı veya Nornir yedekleme motoru çalışırken bellek üzerinde anlık olarak çözülür.
-
-### 3.2 Active Directory Entegrasyonu ve RBAC
-Kullanıcılar kurumsal etki alanı hesaplarıyla sisteme giriş yaparlar:
-
-| AD Güvenlik Grubu | Sistem Rolü | İzinler & Yetkiler |
-| :--- | :--- | :--- |
-| `Network_Admins` | `admin` | Cihaz CRUD, Grup yönetimi, Web SSH, Canlı Config alma, Konfigürasyon değiştirme, Kullanıcı rolleri. |
-| `Network_Operators` | `operator` | Web SSH terminal erişimi, Canlı Config görüntüleme, Port durumlarını inceleme ve anlık sorgulama. |
-| `Network_Viewers` | `viewer` | Yalnızca okuma (Read-only); Envanter listesi, port durumları ve geçmiş konfigürasyon yedekleri. |
-
----
-
-## 4. Veritabanı Modelleri İlişki Şeması (ERD)
+## 2. Data model
 
 ```mermaid
 erDiagram
-    DeviceGroup ||--o{ Device : "içerir"
-    Device ||--o{ Port : "sahiptir"
-    Device ||--o{ ConfigBackup : "yedek geçmişi"
-
+    DeviceGroup ||--o{ Device : contains
+    Device ||--o{ Port : exposes
+    Device ||--o{ ConfigBackup : versions
     DeviceGroup {
-        int id PK
-        string name UK
-        text description
-        datetime created_at
-        datetime updated_at
+      int id PK
+      string name UK
+      text description
+      datetime created_at
+      datetime updated_at
     }
-
     Device {
-        int id PK
-        string hostname UK
-        string ip_address
-        string vendor
-        string model
-        string os_type
-        string os_version
-        int ssh_port
-        boolean is_active
-        string status
-        text encrypted_credentials "AES-256 Vault"
-        int group_id FK
-        datetime last_backup_at
-        datetime created_at
-        datetime updated_at
+      int id PK
+      string hostname UK
+      string ip_address
+      string vendor
+      string os_type
+      int ssh_port
+      boolean is_active
+      string status
+      text encrypted_credentials
+      int group_id FK
+      datetime last_backup_at
     }
-
     Port {
-        int id PK
-        int device_id FK
-        string name
-        string description
-        string status
-        string admin_status
-        int vlan
-        string mac_address
-        string speed
-        string duplex
-        datetime last_change
-        datetime created_at
-        datetime updated_at
+      int id PK
+      int device_id FK
+      string name
+      string status
+      string admin_status
+      int vlan
+      string mac_address
+      string speed
+      datetime last_change
     }
-
     ConfigBackup {
-        int id PK
-        int device_id FK
-        text config_text
-        string checksum_sha256
-        int version
-        string backup_type
-        datetime created_at
+      int id PK
+      int device_id FK
+      text config_text
+      string checksum_sha256
+      int version
+      string backup_type
+      datetime created_at
     }
-
     User {
-        int id PK
-        string username UK
-        string display_name
-        string email UK
-        string hashed_password
-        string role
-        boolean is_active
-        boolean is_ad_user
-        datetime last_login
-        datetime created_at
-        datetime updated_at
+      int id PK
+      string username UK
+      string email
+      string hashed_password
+      string role
+      boolean is_active
+      boolean is_ad_user
     }
 ```
 
----
+Alembic runs before the backend starts. The initial baseline migration creates missing tables and leaves existing SQLAlchemy-created tables and data intact. Application startup also calls `create_all` as a compatibility safety net; future schema changes should be implemented as new Alembic revisions.
 
-## 5. API Uç Noktaları Özeti (`/api/v1`)
+## 3. Network inventory and automation
 
-### Kimlik Doğrulama & Yetkilendirme (`/auth`)
-- `POST /api/v1/auth/login`: AD/LDAP veya yerel hesapla oturum açma, JWT döndürür.
-- `GET /api/v1/auth/me`: Giriş yapmış kullanıcının bilgileri ve aktif rolü.
-- `GET /api/v1/auth/roles`: Sistemdeki RBAC rolleri ve açıklamaları.
+- Device records are enrolled by an administrator. SSH credentials are encrypted before persistence.
+- Vendor profiles provide the driver and read-only commands for interface state, VLANs, MAC tables, version, and configuration retrieval.
+- Port discovery is dispatched to Celery and scheduled hourly. It parses supported common CLI layouts and upserts interface status/VLAN/MAC attributes. Unsupported output layouts can produce incomplete data; vendor-specific parser tests should accompany new profiles.
+- Manual configuration retrieval uses the live-config API. Backups are versioned by SHA-256; bulk and scheduled backups fan out across Celery workers.
+- Live connections run in a thread rather than blocking the async API event loop.
+- A failed SSH connection is reported as a failure. Simulated data is used only in explicit simulation mode or tests.
 
-### Sağlık Kontrolü (`/health`)
-- `GET /api/v1/health`: FastAPI, MariaDB ve Redis canlılık kontrolleri.
+## 4. Authentication and authorization
 
-### Cihaz Grupları (`/groups`)
-- `GET /api/v1/groups`: Grup listeleme (sayfalama destekli).
-- `POST /api/v1/groups`: Yeni cihaz grubu oluşturma.
-- `GET /api/v1/groups/{id}`: Grup detayı.
-- `PUT /api/v1/groups/{id}`: Grup güncelleme.
-- `DELETE /api/v1/groups/{id}`: Grup silme.
+Users authenticate through Active Directory/LDAP or a local account. LDAP filters escape user input and LDAPS validates server certificates. AD group names map to `admin`, `operator`, or `viewer`.
 
-### Ağ Cihazları (`/devices`)
-- `GET /api/v1/devices`: Cihaz listesi (üretici, grup, aktiflik filtreleri).
-- `POST /api/v1/devices`: Cihaz ekleme (parolalar Vault ile şifrelenir).
-- `GET /api/v1/devices/{id}`: Cihaz detayı.
-- `PUT /api/v1/devices/{id}`: Cihaz güncelleme.
-- `DELETE /api/v1/devices/{id}`: Cihaz silme.
+| Role | Permissions |
+|---|---|
+| `admin` | Manage inventory/groups/ports; queue backups and discovery; view live config, backup content/diffs, and use the read-only command console |
+| `operator` | Read inventory; queue backup/discovery; view live config and backup content/diffs; use the read-only command console |
+| `viewer` | Read inventory, ports, and backup history; no configuration payloads or terminal access |
 
-### Port & Arayüzler (`/ports`)
-- `GET /api/v1/ports`: Switch portları listeleme (cihaz ve VLAN filtresi).
-- `POST /api/v1/ports`: Port kaydı oluşturma.
-- `GET /api/v1/ports/{id}`: Port detayı.
-- `PUT /api/v1/ports/{id}`: Port durumu/VLAN güncelleme.
-- `DELETE /api/v1/ports/{id}`: Port kaydı silme.
+Protected API routes verify the JWT, load the active user, and compare the token role to the current database role. Password hashes use PBKDF2-HMAC-SHA256; legacy salted SHA-256 hashes are verified and upgraded at the next successful local login.
+
+## 5. Vault and sensitive data
+
+- Credentials use Fernet (AES-128-CBC plus HMAC-SHA256) with a valid URL-safe 32-byte key; the backend never serializes credential fields into `DeviceResponse`.
+- Production startup requires a valid Fernet key, a sufficiently long JWT signing secret, mock authentication disabled, debug disabled, and SSH host-key checking enabled.
+- Older development installations with an invalid Fernet key retain the legacy PBKDF2 derivation for compatibility and emit a critical log. It is not accepted in production; migrate encrypted records to a generated key before promoting such an installation.
+- Configuration snapshots can include secrets. Only admins/operators can retrieve full snapshots or diffs; viewers can access history metadata.
+- Never log passwords, tokens, decrypted credentials, or full device configurations.
+
+## 6. WebSocket command console
+
+Endpoint: `WS /api/v1/terminal/devices/{device_id}`.
+
+1. The browser opens a same-origin socket and sends a JWT in the first JSON frame.
+2. The server checks the configured `Origin`, token expiry, current active user, role, and active device inventory record.
+3. The server decrypts credentials in memory only.
+4. Only exact commands from the device's vendor profile for interface, VLAN, MAC, and version queries are accepted. Arbitrary CLI input, configuration changes, and shell commands are rejected.
+5. Output is bounded and returned to xterm.js. Credentials are never sent to the browser.
+
+The feature is a constrained, read-only command console, not an unrestricted Web SSH shell.
+
+## 7. Scheduled jobs and services
+
+- Celery Beat dispatches configuration backups daily at 03:00 in `CELERY_TIMEZONE` (default `Europe/Istanbul`).
+- Celery Beat dispatches port discovery hourly.
+- Worker concurrency is configured with `CELERY_CONCURRENCY` (default `8`).
+- MariaDB and Redis use named Docker volumes. Their host ports bind to loopback by default.
+- The Compose stack does not terminate HTTPS. Production deployments must provide TLS, managed secrets, network segmentation, backups, monitoring, and a trusted SSH `known_hosts` file.
+
+## 8. API surface
+
+Base path: `/api/v1`.
+
+| Route | Purpose |
+|---|---|
+| `/health` | Minimal dependency health response |
+| `/auth/login`, `/auth/me`, `/auth/roles` | Authentication and role metadata |
+| `/devices`, `/groups`, `/ports` | Inventory CRUD, role protected |
+| `/devices/{id}/live-config` | On-demand live config for admins/operators |
+| `/ports/discovery/run` | Queue port discovery |
+| `/backups/devices/{id}/run`, `/backups/run-all` | Manual/scheduled backup processing |
+| `/backups/devices/{id}` | Backup history metadata |
+| `/backups/{id}`, `/backups/diff/compare` | Sensitive config content and diff |
+| `/vendors` | Vendor profile catalog |
+| `/terminal/devices/{id}` (WebSocket) | Allowlisted read-only command stream |
+
+Interactive OpenAPI documentation is enabled outside production and disabled in production.
+
+## 9. Change and validation expectations
+
+- Add an Alembic revision for every schema change; do not modify the database volume manually.
+- Add parser tests for each vendor output format and mock all external device connections in unit tests.
+- Run backend tests, frontend type-check/build, `npm audit`, Compose validation, and container health checks before release.
+- Never run `docker compose down -v` as a routine update command.

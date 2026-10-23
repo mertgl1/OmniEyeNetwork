@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 from httpx import AsyncClient
 from app.services.diff_service import calculate_sha256, generate_config_diff
 
@@ -63,7 +64,7 @@ async def test_vendor_api_endpoints(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_backup_and_diff_flow(client: AsyncClient):
+async def test_backup_and_diff_flow(client: AsyncClient, monkeypatch):
     # 1. Create a Huawei Switch device
     dev_res = await client.post(
         "/api/v1/devices",
@@ -110,7 +111,12 @@ async def test_backup_and_diff_flow(client: AsyncClient):
     cfg_text = b1_detail.json()["config_text"]
     assert "sysname hw-leaf-01" in cfg_text  # Huawei format
 
-    # 6. Test Bulk run
+    # 6. Test bulk run dispatches to Celery rather than blocking the API request
+    monkeypatch.setattr(
+        "app.api.v1.endpoints.backups.backup_all_devices.delay",
+        lambda **kwargs: SimpleNamespace(id="test-backup-task"),
+    )
     bulk_res = await client.post("/api/v1/backups/run-all")
     assert bulk_res.status_code == 200
-    assert bulk_res.json()["total_processed"] >= 1
+    assert bulk_res.json()["status"] == "dispatched"
+    assert bulk_res.json()["task_id"] == "test-backup-task"

@@ -35,6 +35,12 @@ async def test_ldap_authentication_invalid_password():
     assert user is None
 
 
+def test_role_mapping_prefers_highest_privilege():
+    assert ad_service._map_groups_to_role(
+        ["CN=Network_Viewers,OU=Groups,DC=example,DC=local", "CN=Network_Admins,OU=Groups,DC=example,DC=local"]
+    ) == "admin"
+
+
 def test_password_hashing():
     pw = "NetworkSec2026!"
     hashed = get_password_hash(pw)

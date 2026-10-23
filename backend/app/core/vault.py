@@ -1,11 +1,13 @@
-import base64
 import json
+import logging
 from typing import Any, Dict, Optional
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class VaultEngine:
@@ -17,16 +19,21 @@ class VaultEngine:
         raw_key = key or settings.VAULT_SECRET_KEY
         try:
             self._fernet = Fernet(raw_key.encode() if isinstance(raw_key, str) else raw_key)
-        except Exception:
-            # Fallback: derive a valid 32-byte url-safe base64 key using PBKDF2
+        except (TypeError, ValueError):
+            if settings.ENVIRONMENT.lower() == "production":
+                raise ValueError("Production requires a valid Fernet VAULT_SECRET_KEY.")
+            logger.critical(
+                "Legacy Vault key derivation is active; replace VAULT_SECRET_KEY with a generated Fernet key."
+            )
             kdf = PBKDF2HMAC(
                 algorithm=hashes.SHA256(),
                 length=32,
                 salt=b"omnieye_static_salt_2026",
                 iterations=100_000,
             )
-            derived = base64.urlsafe_b64encode(kdf.derive(raw_key.encode()))
-            self._fernet = Fernet(derived)
+            import base64
+
+            self._fernet = Fernet(base64.urlsafe_b64encode(kdf.derive(raw_key.encode())))
 
     def encrypt_credentials(self, credentials: Dict[str, Any]) -> str:
         """Serializes and encrypts credentials dict into an AES-256 encrypted string."""

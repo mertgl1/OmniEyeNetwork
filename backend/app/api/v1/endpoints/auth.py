@@ -42,6 +42,11 @@ async def login(
             )
             db.add(user)
         else:
+            if not user.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User account is deactivated.",
+                )
             # Update role and profile attributes from AD groups
             user.display_name = ldap_user.display_name
             user.email = ldap_user.email
@@ -75,6 +80,10 @@ async def login(
                 detail="User account is deactivated.",
             )
 
+        if not local_user.hashed_password.startswith("pbkdf2_sha256$"):
+            from app.core.security import get_password_hash
+
+            local_user.hashed_password = get_password_hash(password)
         local_user.last_login = datetime.now(timezone.utc)
         await db.commit()
 

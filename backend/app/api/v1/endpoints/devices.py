@@ -1,15 +1,20 @@
+import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_role
 from app.core.database import get_db
 from app.core.vault import vault
 from app.models.device import Device
 from app.models.device_group import DeviceGroup
 from app.schemas.device import DeviceCreate, DeviceResponse, DeviceUpdate
+from app.services.automation_engine import automation_engine
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=List[DeviceResponse])
@@ -20,6 +25,7 @@ async def list_devices(
     is_active: Optional[bool] = Query(None, description="Filter active/inactive"),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
+    current_user=Depends(require_role(["admin", "operator", "viewer"])),
     db: AsyncSession = Depends(get_db),
 ):
     """List network devices with optional filtering and pagination."""
@@ -41,6 +47,7 @@ async def list_devices(
 @router.post("", response_model=DeviceResponse, status_code=status.HTTP_201_CREATED)
 async def create_device(
     device_in: DeviceCreate,
+    current_user=Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Add a new network device to OmniEye inventory."""
@@ -85,6 +92,7 @@ async def create_device(
 @router.get("/{device_id}", response_model=DeviceResponse)
 async def get_device(
     device_id: int,
+    current_user=Depends(require_role(["admin", "operator", "viewer"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Get device details by ID."""
@@ -97,10 +105,40 @@ async def get_device(
     return device
 
 
+@router.get("/{device_id}/live-config")
+async def get_live_config(
+    device_id: int,
+    current_user=Depends(require_role(["admin", "operator"])),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch a fresh running configuration from an enrolled device."""
+    device = await db.get(Device, device_id)
+    if not device:
+        raise HTTPException(status_code=404, detail=f"Device #{device_id} not found.")
+    try:
+        credentials = vault.decrypt_credentials(device.encrypted_credentials) or {}
+        config_text = await automation_engine.fetch_running_config(device, credentials)
+    except Exception:
+        device.status = "error"
+        await db.commit()
+        logger.exception("Live configuration request failed for device %s.", device.hostname)
+        raise HTTPException(status_code=502, detail="Unable to retrieve live configuration from the device.")
+    device.status = "online"
+    await db.commit()
+    logger.info("Live configuration retrieved by %s for device %s.", current_user.username, device.hostname)
+    return {
+        "device_id": device.id,
+        "hostname": device.hostname,
+        "config_text": config_text,
+        "retrieved_at": datetime.now(timezone.utc),
+    }
+
+
 @router.put("/{device_id}", response_model=DeviceResponse)
 async def update_device(
     device_id: int,
     device_in: DeviceUpdate,
+    current_user=Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Update device configuration and inventory details."""
@@ -155,6 +193,7 @@ async def update_device(
 @router.delete("/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_device(
     device_id: int,
+    current_user=Depends(require_role(["admin"])),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a device and its related port and backup history."""

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from celery import group
 from sqlalchemy import create_engine, select, desc
 from sqlalchemy.orm import Session
 
@@ -89,23 +90,26 @@ def backup_single_device(device_id: int, backup_type: str = "manual") -> Dict[st
 
 
 @celery_app.task(name="app.tasks.backup_tasks.backup_all_devices")
-def backup_all_devices(group_id: Optional[int] = None) -> Dict[str, Any]:
-    """Celery worker task: Triggers backup tasks for all active devices in parallel."""
+def backup_all_devices(group_id: Optional[int] = None, backup_type: str = "bulk") -> Dict[str, Any]:
+    """Fan out individual device backup tasks across the configured worker pool."""
     with Session(sync_engine) as session:
-        query = select(Device).filter(Device.is_active == True)  # noqa: E712
+        query = select(Device.id).filter(Device.is_active == True)  # noqa: E712
         if group_id:
             query = query.filter(Device.group_id == group_id)
+        device_ids = session.execute(query).scalars().all()
 
-        devices = session.execute(query).scalars().all()
-        results = []
+    result = group(
+        backup_single_device.s(device_id, backup_type=backup_type)
+        for device_id in device_ids
+    ).apply_async()
+    return {
+        "status": "dispatched",
+        "total_devices": len(device_ids),
+        "group_task_id": result.id,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
-        for device in devices:
-            # Execute inline or queue subtask
-            res = backup_single_device(device.id, backup_type="scheduled")
-            results.append(res)
 
-        return {
-            "total_devices": len(devices),
-            "results": results,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
+@celery_app.task(name="app.tasks.backup_tasks.dispatch_scheduled_backups")
+def dispatch_scheduled_backups() -> Dict[str, Any]:
+    return backup_all_devices(group_id=None, backup_type="scheduled")

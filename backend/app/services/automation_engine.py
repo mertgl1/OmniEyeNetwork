@@ -1,7 +1,10 @@
-import os
+import asyncio
+import logging
 from typing import Any, Dict, Optional
 from app.core.config import settings
 from app.services.vendor_profiles import get_vendor_profile
+
+logger = logging.getLogger(__name__)
 
 
 class AutomationEngine:
@@ -10,7 +13,7 @@ class AutomationEngine:
     """
 
     def __init__(self):
-        self.simulation_mode = os.getenv("NETWORK_SIMULATION_MODE", "auto").lower()
+        self.simulation_mode = settings.NETWORK_SIMULATION_MODE.lower()
 
     def _generate_simulated_config(self, device: Any, vendor_profile: Any) -> str:
         """Generates realistic vendor-compliant configuration for development and test suites."""
@@ -122,48 +125,157 @@ end"""
             model=getattr(device, "model", None),
         )
 
-        # Simulation / Test environment check
-        is_test_env = settings.ENVIRONMENT == "test"
-        is_sim_forced = self.simulation_mode in ("true", "1", "yes")
-
-        if is_test_env or is_sim_forced:
+        if self._simulation_enabled():
             return self._generate_simulated_config(device, profile)
 
-        # Live SSH connection using Netmiko
         try:
-            from netmiko import ConnectHandler  # type: ignore
+            return await asyncio.to_thread(
+                self._send_device_command,
+                device,
+                profile,
+                credentials or {},
+                profile.backup_command,
+            )
+        except Exception as e:
+            logger.warning(
+                "Configuration retrieval failed for device %s (%s).",
+                device.hostname,
+                device.ip_address,
+                exc_info=True,
+            )
+            raise RuntimeError(f"Failed to connect to device {device.hostname} ({device.ip_address}): {str(e)}")
 
-            creds = credentials or {}
-            username = creds.get("username", "")
-            password = creds.get("password", "")
-            secret = creds.get("enable_secret", "")
+    async def fetch_inventory_outputs(
+        self,
+        device: Any,
+        credentials: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, str]:
+        """Collect the vendor profile's read-only interface, VLAN and MAC command outputs."""
+        profile = get_vendor_profile(
+            vendor=getattr(device, "vendor", "cisco"),
+            os_type=getattr(device, "os_type", None),
+            model=getattr(device, "model", None),
+        )
+        commands = {
+            "interfaces": profile.interface_command,
+            "vlans": profile.vlan_command,
+            "macs": profile.mac_command,
+        }
+        if self._simulation_enabled():
+            return self._simulated_inventory_outputs()
+        return await asyncio.to_thread(
+            self._collect_inventory_outputs,
+            device,
+            profile,
+            credentials or {},
+            commands,
+        )
 
-            device_params = {
-                "device_type": profile.os_type,
-                "host": device.ip_address,
-                "port": device.ssh_port or 22,
-                "username": username,
-                "password": password,
-                "secret": secret,
-                "timeout": 20,
-                "session_timeout": 60,
+    async def send_readonly_command(
+        self,
+        device: Any,
+        credentials: Optional[Dict[str, Any]],
+        command: str,
+    ) -> str:
+        """Run only an exact vendor-profile show command; arbitrary CLI input is rejected."""
+        profile = get_vendor_profile(
+            vendor=getattr(device, "vendor", "cisco"),
+            os_type=getattr(device, "os_type", None),
+            model=getattr(device, "model", None),
+        )
+        allowed_commands = {
+            profile.interface_command,
+            profile.vlan_command,
+            profile.mac_command,
+            profile.version_command,
+        }
+        if command not in allowed_commands:
+            raise ValueError("Command is not in the device's read-only command allowlist.")
+        if self._simulation_enabled():
+            return f"Simulation mode: {command}\nNo device connection was made."
+        return await asyncio.to_thread(
+            self._send_device_command,
+            device,
+            profile,
+            credentials or {},
+            command,
+        )
+
+    def _simulation_enabled(self) -> bool:
+        return settings.ENVIRONMENT == "test" or self.simulation_mode in ("true", "1", "yes")
+
+    @staticmethod
+    def _device_params(device: Any, profile: Any, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        if not credentials.get("username") or not credentials.get("password"):
+            raise RuntimeError("Device SSH credentials are not configured.")
+        return {
+            "device_type": profile.os_type,
+            "host": device.ip_address,
+            "port": device.ssh_port or 22,
+            "username": credentials["username"],
+            "password": credentials["password"],
+            "secret": credentials.get("enable_secret", ""),
+            "timeout": 20,
+            "session_timeout": 60,
+            "ssh_strict": settings.SSH_STRICT_HOST_KEY_CHECKING,
+            "system_host_keys": settings.SSH_STRICT_HOST_KEY_CHECKING,
+        }
+
+    @classmethod
+    def _send_device_command(
+        cls,
+        device: Any,
+        profile: Any,
+        credentials: Dict[str, Any],
+        command: str,
+    ) -> str:
+        from netmiko import ConnectHandler
+
+        with ConnectHandler(**cls._device_params(device, profile, credentials)) as connection:
+            if credentials.get("enable_secret"):
+                connection.enable()
+            if profile.paging_disable_command:
+                connection.send_command(profile.paging_disable_command)
+            return connection.send_command(command)
+
+    @classmethod
+    def _collect_inventory_outputs(
+        cls,
+        device: Any,
+        profile: Any,
+        credentials: Dict[str, Any],
+        commands: Dict[str, str],
+    ) -> Dict[str, str]:
+        from netmiko import ConnectHandler
+
+        with ConnectHandler(**cls._device_params(device, profile, credentials)) as connection:
+            if credentials.get("enable_secret"):
+                connection.enable()
+            if profile.paging_disable_command:
+                connection.send_command(profile.paging_disable_command)
+            return {
+                key: connection.send_command(command)
+                for key, command in commands.items()
             }
 
-            with ConnectHandler(**device_params) as net_connect:
-                if secret:
-                    net_connect.enable()
-
-                if profile.paging_disable_command:
-                    net_connect.send_command(profile.paging_disable_command)
-
-                output = net_connect.send_command(profile.backup_command)
-                return output
-
-        except Exception as e:
-            # If in auto-simulation mode and live device is unreachable (e.g. lab IP), fallback to simulated
-            if self.simulation_mode == "auto":
-                return self._generate_simulated_config(device, profile)
-            raise RuntimeError(f"Failed to connect to device {device.hostname} ({device.ip_address}): {str(e)}")
+    @staticmethod
+    def _simulated_inventory_outputs() -> Dict[str, str]:
+        return {
+            "interfaces": (
+                "Interface              IP-Address      Status                Protocol\n"
+                "GigabitEthernet1/0/1   unassigned      up                    up\n"
+                "GigabitEthernet1/0/2   unassigned      down                  down\n"
+            ),
+            "vlans": (
+                "VLAN Name                             Status    Ports\n"
+                "10   USERS                            active    GigabitEthernet1/0/1\n"
+                "20   SERVERS                          active    GigabitEthernet1/0/2\n"
+            ),
+            "macs": (
+                "Vlan    Mac Address       Type        Ports\n"
+                "10      001a.2b3c.4d5e    DYNAMIC     GigabitEthernet1/0/1\n"
+            ),
+        }
 
 
 automation_engine = AutomationEngine()

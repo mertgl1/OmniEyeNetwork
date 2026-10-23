@@ -9,20 +9,32 @@ if backend_dir not in sys.path:
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from cryptography.fernet import Fernet
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 # Set test environment
 os.environ["ENVIRONMENT"] = "test"
 os.environ["AD_MOCK_MODE"] = "true"
-os.environ["VAULT_SECRET_KEY"] = "k27jU6iXn1p7s2_v8xR3yA6b_E9gW1qT5z0mL4oI8c="
+os.environ["VAULT_SECRET_KEY"] = Fernet.generate_key().decode("ascii")
 os.environ["SECRET_KEY"] = "testsecretjwtkey1234567890123456789012345"
+os.environ["NETWORK_SIMULATION_MODE"] = "true"
 
 from app.core.database import Base, get_db
+from app.core.security import create_access_token
 from app.main import app
+from app.models.user import User
 
 # In-memory SQLite async engine for tests
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 test_engine = create_async_engine(TEST_DATABASE_URL, echo=False)
+
+
+@event.listens_for(test_engine.sync_engine, "connect")
+def enable_sqlite_foreign_keys(connection, _record):
+    connection.execute("PRAGMA foreign_keys=ON")
+
+
 TestingSessionLocal = async_sessionmaker(
     bind=test_engine,
     class_=AsyncSession,
@@ -44,6 +56,9 @@ async def setup_test_db():
     """Create all tables before each test and drop them after."""
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with TestingSessionLocal() as session:
+        session.add(User(username="test-admin", role="admin", is_active=True))
+        await session.commit()
     yield
     async with test_engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -60,5 +75,10 @@ app.dependency_overrides[get_db] = override_get_db
 @pytest.fixture
 async def client():
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    token = create_access_token(subject="test-admin", role="admin")
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as ac:
         yield ac

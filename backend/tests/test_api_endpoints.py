@@ -40,6 +40,22 @@ async def test_auth_roles_list(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_inventory_requires_auth_and_viewers_cannot_write(client: AsyncClient):
+    unauthenticated = await client.get("/api/v1/devices", headers={"Authorization": ""})
+    assert unauthenticated.status_code == 401
+
+    login = await client.post("/api/v1/auth/login", json={"username": "viewer", "password": "viewer123"})
+    assert login.status_code == 200
+    viewer_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    denied = await client.post(
+        "/api/v1/groups",
+        headers=viewer_headers,
+        json={"name": "Viewer must not create groups"},
+    )
+    assert denied.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_device_groups_crud(client: AsyncClient):
     # 1. Create group
     create_res = await client.post(
@@ -147,3 +163,25 @@ async def test_devices_and_ports_crud(client: AsyncClient):
     # 8. Delete device
     del_dev = await client.delete(f"/api/v1/devices/{device_id}")
     assert del_dev.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_deleting_group_detaches_devices(client: AsyncClient):
+    group = await client.post("/api/v1/groups", json={"name": "preserve-devices-group"})
+    device = await client.post(
+        "/api/v1/devices",
+        json={
+            "hostname": "preserve-device",
+            "ip_address": "192.0.2.14",
+            "vendor": "Cisco",
+            "os_type": "cisco_ios",
+            "group_id": group.json()["id"],
+        },
+    )
+    assert device.status_code == 201
+
+    deleted = await client.delete(f"/api/v1/groups/{group.json()['id']}")
+    assert deleted.status_code == 204
+    retained = await client.get(f"/api/v1/devices/{device.json()['id']}")
+    assert retained.status_code == 200
+    assert retained.json()["group_id"] is None

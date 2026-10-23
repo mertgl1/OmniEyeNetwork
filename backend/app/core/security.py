@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional, Union
+import base64
 import hashlib
 import hmac
+import secrets
 import jwt
 
 from app.core.config import settings
@@ -10,21 +12,36 @@ ALGORITHM = "HS256"
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifies a password against a salt+sha256 hash."""
+    """Verify PBKDF2 password hashes and legacy salted SHA-256 hashes."""
     try:
-        salt, stored_hash = hashed_password.split("$")
-        computed_hash = hashlib.sha256((salt + plain_password).encode("utf-8")).hexdigest()
-        return hmac.compare_digest(stored_hash, computed_hash)
-    except Exception:
-        return False
+        algorithm, iterations, salt, stored_hash = hashed_password.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        actual = hashlib.pbkdf2_hmac(
+            "sha256", plain_password.encode("utf-8"),
+            base64.urlsafe_b64decode(salt.encode("ascii")), int(iterations),
+        )
+        return hmac.compare_digest(base64.urlsafe_b64encode(actual).decode("ascii"), stored_hash)
+    except (ValueError, TypeError):
+        try:
+            salt, stored_hash = hashed_password.split("$", 1)
+            computed_hash = hashlib.sha256((salt + plain_password).encode("utf-8")).hexdigest()
+            return hmac.compare_digest(stored_hash, computed_hash)
+        except ValueError:
+            return False
 
 
 def get_password_hash(password: str) -> str:
-    """Hashes a password with a unique salt using SHA-256."""
-    import secrets
-    salt = secrets.token_hex(16)
-    computed_hash = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
-    return f"{salt}${computed_hash}"
+    """Hash a password using PBKDF2-HMAC-SHA256 with a random salt."""
+    iterations = 600_000
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return "$".join((
+        "pbkdf2_sha256",
+        str(iterations),
+        base64.urlsafe_b64encode(salt).decode("ascii"),
+        base64.urlsafe_b64encode(digest).decode("ascii"),
+    ))
 
 
 def create_access_token(

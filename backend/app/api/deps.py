@@ -32,10 +32,10 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token payload is missing subject.",
             )
-    except Exception as e:
+    except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired authentication token: {str(e)}",
+            detail="Invalid or expired authentication token.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -51,6 +51,13 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="User account is inactive.",
+        )
+
+    if payload.get("role") != user.role:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token is no longer valid.",
+            headers={"WWW-Authenticate": "Bearer"},
         )
 
     return user
