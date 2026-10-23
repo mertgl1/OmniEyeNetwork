@@ -1,0 +1,108 @@
+services:
+  mariadb:
+    image: mariadb:11.4
+    container_name: omnieye_mariadb
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:-root_secure_password}
+      MARIADB_DATABASE: ${DB_NAME:-omnieye_db}
+      MARIADB_USER: ${DB_USER:-omnieye_user}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-omnieye_secret_pass}
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./docker/mariadb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost", "-u", "${DB_USER:-omnieye_user}", "-p${DB_PASSWORD:-omnieye_secret_pass}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - omnieye_network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: omnieye_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - omnieye_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnieye_backend
+    restart: unless-stopped
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-omnieye_user}
+      - DB_PASSWORD=${DB_PASSWORD:-omnieye_secret_pass}
+      - DB_NAME=${DB_NAME:-omnieye_db}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - VAULT_SECRET_KEY=${VAULT_SECRET_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - ./backend:/app
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - omnieye_network
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: omnieye_celery_worker
+    restart: unless-stopped
+    command: celery -A app.core.celery_app worker --loglevel=info
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_USER=${DB_USER:-omnieye_user}
+      - DB_PASSWORD=${DB_PASSWORD:-omnieye_secret_pass}
+      - DB_NAME=${DB_NAME:-omnieye_db}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - VAULT_SECRET_KEY=${VAULT_SECRET_KEY}
+      - SECRET_KEY=${SECRET_KEY}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      backend:
+        condition: service_started
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - omnieye_network
+
+volumes:
+  mariadb_data:
+  redis_data:
+
+networks:
+  omnieye_network:
+    driver: bridge

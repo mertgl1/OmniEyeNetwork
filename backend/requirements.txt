@@ -1,0 +1,17 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.28.0
+sqlalchemy[asyncio]>=2.0.28
+asyncmy>=0.2.9
+pymysql>=1.1.0
+pydantic>=2.6.4
+pydantic-settings>=2.2.1
+alembic>=1.13.1
+redis>=5.0.3
+celery>=5.3.6
+python-dotenv>=1.0.1
+cryptography>=42.0.5
+netmiko>=4.3.0
+nornir>=3.4.1
+nornir-netmiko>=1.0.1
+nornir-utils>=0.2.0
+websockets>=12.0
