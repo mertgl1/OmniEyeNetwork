@@ -43,6 +43,7 @@ erDiagram
       int id PK
       string hostname UK
       string ip_address
+      string device_type
       string vendor
       string os_type
       int ssh_port
@@ -89,7 +90,11 @@ Alembic runs before the backend starts. The initial baseline migration creates m
 ## 3. Network inventory and automation
 
 - Device records are enrolled by an administrator. SSH credentials are encrypted before persistence.
+- `device_type` is a persisted inventory category (`switch`, `router`, `firewall`, `access_point`, `other`); existing devices migrate to `switch`. The UI currently activates only Switches.
 - Vendor profiles provide the driver and read-only commands for interface state, VLANs, MAC tables, version, and configuration retrieval.
+- The vendor catalog separates supported automation profiles from catalog-only vendors. Ubiquiti / UniFi is listed as unsupported until its SSH/CLI and Controller API scopes are implemented.
+- Device enrollment validates that the submitted vendor and Netmiko OS type match a supported profile; catalog-only or mismatched profiles cannot be enrolled accidentally.
+- Admins may explicitly request an identity probe during enrollment. The probe accepts literal IPs only, blocks loopback/link-local/multicast/reserved addresses, uses bounded Netmiko read-only detection and version commands, and returns metadata only. Temporary credentials are neither stored nor logged; the result requires user review and form submission.
 - Port discovery is dispatched to Celery and scheduled hourly. Vendor-keyed parsers cover all 12 declared profiles with sanitized synthetic fixtures. An output layout that yields no recognizable interfaces is reported as unsupported instead of a successful empty inventory.
 - Each successfully discovered port records `last_discovered_at`. The dashboard's switch view displays cached state with that timestamp; hover/focus never opens a device connection.
 - The port grid is sized from discovered interface records, with a searchable list alternative. No fixed 24/48-port hardware assumption is made.
@@ -163,17 +168,20 @@ Base path: `/api/v1`.
 | `/backups/devices/{id}` | Backup history metadata |
 | `/backups/{id}`, `/backups/diff/compare` | Sensitive config content and diff |
 | `/backups/audit/redaction` | Admin-only, paginated metadata-only report for legacy snapshots |
-| `/vendors` | Vendor profile catalog |
+| `/vendors` | Supported vendor command profiles |
+| `/vendors/catalog` | Supported and catalog-only vendor metadata |
+| `/vendors/detect` | Admin-only, explicit read-only identity probe; credentials are request-scoped |
 | `/terminal/devices/{id}` (WebSocket) | Allowlisted read-only command stream |
 
 Interactive OpenAPI documentation is enabled outside production and disabled in production.
 
 ## 10. Next planned capability
 
-Firewall device support follows the switch port-view work. Before implementation,
-confirm supported firewall vendors/models and whether the first release includes
-only inventory/telemetry or also policy visibility. Firewall-specific commands
-and parsers are intentionally outside the current switch-view scope.
+Router, firewall, and access-point inventory views follow the Switch-first
+management UI. Before enabling a category, confirm supported vendor/models and
+safe read-only commands; firewall policy visibility and UniFi Controller API
+integration require separate scope decisions. Those commands and parsers remain
+outside the current switch-view scope.
 
 ## 11. Change and validation expectations
 

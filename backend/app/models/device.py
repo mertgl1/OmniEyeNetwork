@@ -12,6 +12,7 @@ class Device(Base):
     ip_address = Column(String(45), nullable=False, index=True)
     vendor = Column(String(50), nullable=False, index=True)  # cisco, huawei, aruba, juniper, etc.
     model = Column(String(100), nullable=True)
+    device_type = Column(String(32), nullable=False, default="switch", server_default="switch", index=True)
     os_type = Column(String(50), nullable=False, default="cisco_ios")  # Netmiko device_type mapping
     os_version = Column(String(100), nullable=True)
     ssh_port = Column(Integer, nullable=False, default=22)

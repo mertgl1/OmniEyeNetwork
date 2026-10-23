@@ -51,9 +51,12 @@ export interface Device {
   id: number;
   hostname: string;
   ip_address: string;
+  device_type: "switch" | "router" | "firewall" | "access_point" | "other";
   vendor: string;
   model: string | null;
   os_type: string;
+  os_version: string | null;
+  ssh_port: number;
   status: string;
   is_active: boolean;
   group_id: number | null;
@@ -63,6 +66,27 @@ export interface Device {
 export interface DeviceGroup {
   id: number;
   name: string;
+  description?: string | null;
+}
+
+export interface VendorCatalogEntry {
+  vendor_key: string;
+  vendor_name: string;
+  os_type: string | null;
+  supported_models: string[];
+  supported: boolean;
+  support_note: string | null;
+  device_types: Device["device_type"][];
+  models_by_device_type: Partial<Record<Device["device_type"], string[]>>;
+}
+
+export interface IdentityProbeResult {
+  vendor_key: string;
+  vendor_name: string;
+  os_type: string;
+  model: string | null;
+  os_version: string | null;
+  supported_models: string[];
 }
 
 export interface Port {

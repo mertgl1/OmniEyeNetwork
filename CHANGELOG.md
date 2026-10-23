@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Persisted device-category field with a backward-compatible migration and category-filtered device listing.
+- Admin device and group management UI, including safe deletion notices, device-group assignment, and searchable vendor/model/OS profile selection.
+- Admin-triggered identity probe that uses temporary SSH credentials, read-only Netmiko detection, bounded timeouts, and user-confirmed results.
+- Vendor availability catalog that marks Ubiquiti / UniFi as catalog-only rather than implying working device integration.
 - Nornir-backed in-memory inventory execution with bounded concurrent Netmiko sessions for backup and port-discovery batches.
 - Sanitized fixture coverage for interface/VLAN/MAC parsing across all 12 declared vendor profiles; unsupported layouts are reported explicitly.
 - Secret redaction before new backup persistence/checksum calculation and before returning live configurations.
@@ -22,12 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sanitized interface-config fixtures for supported Cisco, Huawei, Aruba/HPE, Dell, and Juniper profiles.
 
 ### Security
+- Identity probes are admin-only, require literal management IPs, reject loopback/link-local/multicast/reserved addresses, and never return or log credentials or raw command output.
+- Identity detection is explicit, read-only, time-bounded, and does not enroll devices automatically.
 - Production secret values can be read from mounted Compose secret files instead of environment values.
 - TLS mode uses TLS 1.2/1.3, read-only certificate/key secrets, HTTP-to-HTTPS redirect, HSTS, and the existing restrictive frontend security headers.
 - Port hover/focus reads only stored inventory; live interface configuration requires an explicit authorized request, is scoped to one interface, and is redacted before return.
 - Existing snapshots are not modified by the audit or retention feature unless they meet the explicit age/minimum-version deletion policy.
 
 ### Changed
+- Switches are the first active inventory category; Router, Firewall, Access Point, and Other navigation entries remain disabled until their profiles and behavior are implemented.
 - Bulk backup and port-discovery work is executed as multi-device Nornir batches rather than one Celery child task per device.
 - Docker Compose exposes bounded Nornir and configurable retention settings to the API and worker services.
 - Port inventory records the most recent successful discovery time; the dashboard paginates inventory results and sorts interface names naturally.

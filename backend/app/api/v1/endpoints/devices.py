@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +19,7 @@ from app.services.interface_config import (
     extract_interface_config,
     supports_interface_config,
 )
-from app.services.vendor_profiles import get_vendor_profile
+from app.services.vendor_profiles import get_vendor_profile, is_supported_vendor_profile
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -28,6 +28,10 @@ logger = logging.getLogger(__name__)
 @router.get("", response_model=List[DeviceResponse])
 async def list_devices(
     group_id: Optional[int] = Query(None, description="Filter by device group"),
+    device_type: Optional[Literal["switch", "router", "firewall", "access_point", "other"]] = Query(
+        None,
+        description="Filter by inventory category",
+    ),
     vendor: Optional[str] = Query(None, description="Filter by vendor (cisco, huawei, aruba, etc.)"),
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status"),
     is_active: Optional[bool] = Query(None, description="Filter active/inactive"),
@@ -40,6 +44,8 @@ async def list_devices(
     query = select(Device)
     if group_id is not None:
         query = query.filter(Device.group_id == group_id)
+    if device_type is not None:
+        query = query.filter(Device.device_type == device_type)
     if vendor:
         query = query.filter(Device.vendor.ilike(f"%{vendor}%"))
     if status_filter:
@@ -59,6 +65,12 @@ async def create_device(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a new network device to OmniEye inventory."""
+    if not is_supported_vendor_profile(device_in.vendor, device_in.os_type):
+        raise HTTPException(
+            status_code=422,
+            detail="Select a supported vendor and matching Netmiko OS profile.",
+        )
+
     # Check if hostname already exists
     existing = await db.execute(select(Device).filter(Device.hostname == device_in.hostname))
     if existing.scalar_one_or_none():
@@ -230,6 +242,15 @@ async def update_device(
         )
 
     update_data = device_in.model_dump(exclude_unset=True, exclude={"username", "password", "enable_secret"})
+
+    if "vendor" in update_data or "os_type" in update_data:
+        next_vendor = update_data.get("vendor", device.vendor)
+        next_os_type = update_data.get("os_type", device.os_type)
+        if not is_supported_vendor_profile(next_vendor, next_os_type):
+            raise HTTPException(
+                status_code=422,
+                detail="Select a supported vendor and matching Netmiko OS profile.",
+            )
 
     # Update Vault credentials if any credential fields are explicitly updated
     if any(k in device_in.model_fields_set for k in ("username", "password", "enable_secret")):

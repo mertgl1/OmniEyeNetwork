@@ -119,6 +119,7 @@ async def test_devices_and_ports_crud(client: AsyncClient):
     dev_data = dev_res.json()
     device_id = dev_data["id"]
     assert dev_data["hostname"] == "sw-access-01"
+    assert dev_data["device_type"] == "switch"
     # Password should NOT be in response
     assert "password" not in dev_data
     assert "SwitchSecretPassword123!" not in str(dev_data)
@@ -127,6 +128,9 @@ async def test_devices_and_ports_crud(client: AsyncClient):
     dev_list = await client.get("/api/v1/devices?vendor=cisco")
     assert dev_list.status_code == 200
     assert len(dev_list.json()) == 1
+    filtered_switches = await client.get("/api/v1/devices?device_type=switch")
+    assert filtered_switches.status_code == 200
+    assert [item["id"] for item in filtered_switches.json()] == [device_id]
 
     # 4. Create Port for this device
     port_payload = {
@@ -185,3 +189,52 @@ async def test_deleting_group_detaches_devices(client: AsyncClient):
     retained = await client.get(f"/api/v1/devices/{device.json()['id']}")
     assert retained.status_code == 200
     assert retained.json()["group_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_device_category_can_be_filtered_and_updated(client: AsyncClient):
+    created = await client.post(
+        "/api/v1/devices",
+        json={
+            "hostname": "future-category-device",
+            "ip_address": "10.20.0.5",
+            "device_type": "router",
+            "vendor": "Cisco",
+            "os_type": "cisco_xr",
+        },
+    )
+
+    assert created.status_code == 201
+    device_id = created.json()["id"]
+    assert created.json()["device_type"] == "router"
+
+    router_list = await client.get("/api/v1/devices?device_type=router")
+    assert [device["id"] for device in router_list.json()] == [device_id]
+
+    updated = await client.put(
+        f"/api/v1/devices/{device_id}",
+        json={"device_type": "firewall"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["device_type"] == "firewall"
+
+    assert (await client.get("/api/v1/devices?device_type=router")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_device_enrollment_rejects_catalog_only_or_mismatched_vendor(client: AsyncClient):
+    payload = {
+        "hostname": "unsupported-vendor-device",
+        "ip_address": "10.20.0.6",
+        "vendor": "Ubiquiti",
+        "os_type": "cisco_ios",
+    }
+
+    unsupported = await client.post("/api/v1/devices", json=payload)
+    assert unsupported.status_code == 422
+
+    payload["hostname"] = "mismatched-vendor-device"
+    payload["vendor"] = "Cisco"
+    payload["os_type"] = "huawei_vrp"
+    mismatched = await client.post("/api/v1/devices", json=payload)
+    assert mismatched.status_code == 422

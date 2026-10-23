@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 
@@ -242,3 +242,109 @@ def get_vendor_profile(vendor: str, os_type: Optional[str] = None, model: Option
 def list_supported_vendors() -> List[VendorCommandProfile]:
     """Returns list of all available vendor command profiles."""
     return list(VENDOR_PROFILES.values())
+
+
+def is_supported_vendor_profile(vendor: str, os_type: str) -> bool:
+    """Ensure an enrolled vendor label matches a known automation profile."""
+    normalized_vendor = (vendor or "").casefold().replace("-", "").replace("_", "").replace(" ", "")
+    normalized_os = (os_type or "").casefold().strip()
+    profile = VENDOR_PROFILES.get(normalized_os)
+    if profile is None:
+        return False
+
+    aliases = {
+        "cisco": ("cisco",),
+        "huawei": ("huawei",),
+        "aruba": ("aruba",),
+        "hp": ("hpe", "hewlettpackard", "hp"),
+        "juniper": ("juniper",),
+        "dell": ("dell",),
+        "extreme": ("extreme",),
+        "mikrotik": ("mikrotik",),
+        "fortinet": ("fortinet", "forti"),
+    }
+    profile_family = profile.vendor_key.split("_", maxsplit=1)[0]
+    expected_aliases = aliases.get(profile_family, (profile_family,))
+    return any(alias in normalized_vendor for alias in expected_aliases)
+
+
+VENDOR_DEVICE_TYPES: Dict[str, List[str]] = {
+    "cisco_ios": ["switch", "router"],
+    "cisco_nxos": ["switch"],
+    "cisco_xr": ["router"],
+    "huawei_vrp": ["switch", "router"],
+    "aruba_os": ["switch"],
+    "hp_procurve": ["switch"],
+    "hp_comware": ["switch"],
+    "juniper_junos": ["switch", "firewall"],
+    "dell_os10": ["switch"],
+    "extreme_exos": ["switch"],
+    "mikrotik_routeros": ["switch", "router"],
+    "fortinet": ["switch", "firewall"],
+}
+
+VENDOR_MODELS_BY_DEVICE_TYPE: Dict[str, Dict[str, List[str]]] = {
+    "cisco_ios": {
+        "switch": ["Catalyst 2960", "Catalyst 3850", "Catalyst 9200", "Catalyst 9300", "Catalyst 9500"],
+        "router": ["ISR 4000", "ASR 1000"],
+    },
+    "huawei_vrp": {
+        "switch": ["CloudEngine 6800", "CloudEngine 8800", "CloudEngine 12800", "S5700", "S6700", "S12700"],
+        "router": ["AR Series Routers"],
+    },
+    "juniper_junos": {
+        "switch": ["EX2300", "EX3400", "EX4300", "EX4600", "QFX5100", "QFX5200"],
+        "firewall": ["SRX300", "SRX1500"],
+    },
+    "fortinet": {
+        "switch": ["FortiSwitch 124E", "FortiSwitch 248E", "FortiSwitch 448E"],
+        "firewall": ["FortiGate 60F", "FortiGate 100F"],
+    },
+    "mikrotik_routeros": {
+        "switch": ["CRS326", "CRS328", "CRS354"],
+        "router": ["CCR1036", "CCR2004", "RB5009"],
+    },
+}
+
+
+def list_vendor_catalog() -> List[Dict[str, Any]]:
+    """Return supported profiles plus explicitly catalog-only vendors."""
+    entries = [
+        {
+            **profile.model_dump(),
+            "supported": True,
+            "support_note": None,
+            "device_types": VENDOR_DEVICE_TYPES.get(profile.vendor_key, ["switch"]),
+            "models_by_device_type": VENDOR_MODELS_BY_DEVICE_TYPE.get(
+                profile.vendor_key,
+                {
+                    device_type: profile.supported_models
+                    for device_type in VENDOR_DEVICE_TYPES.get(profile.vendor_key, ["switch"])
+                },
+            ),
+        }
+        for profile in list_supported_vendors()
+    ]
+    entries.append(
+        {
+            "vendor_key": "ubiquiti",
+            "vendor_name": "Ubiquiti / UniFi",
+            "os_type": None,
+            "supported_models": [],
+            "backup_command": "",
+            "vlan_command": "",
+            "mac_command": "",
+            "interface_command": "",
+            "version_command": "",
+            "paging_disable_command": None,
+            "save_command": None,
+            "supported": False,
+            "support_note": (
+                "Katalogda listelenir; SSH/CLI ve UniFi Controller entegrasyonu "
+                "ayrı bir fazda eklenecektir."
+            ),
+            "device_types": ["switch", "router", "access_point"],
+            "models_by_device_type": {},
+        }
+    )
+    return entries

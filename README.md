@@ -7,6 +7,10 @@
 ## Features
 
 - Managed device, group, and port inventory with role-protected REST APIs.
+- Admin UI for device/group CRUD, device-to-group assignment, search, and vendor/model/OS profile selection.
+- Device inventory categories are persisted and filterable; Switches are the first active category, while router/firewall/access-point views remain planned.
+- Admin-triggered, read-only SSH identity detection fills supported vendor/OS/model/version suggestions before the user confirms enrollment.
+- Ubiquiti / UniFi is visible in the vendor catalog as catalog-only; SSH/CLI and Controller API integration are not yet enabled.
 - Vault-encrypted SSH credentials; credential fields are never included in device API responses.
 - AD/LDAP authentication, JWT sessions, and `admin` / `operator` / `viewer` access roles.
 - Nornir inventory execution with bounded concurrent Netmiko sessions and per-device failure isolation.
@@ -163,15 +167,18 @@ All application API paths are under `/api/v1`.
 |---|---|---|
 | Health | `GET /health` | Public, minimal status only |
 | Auth | `POST /auth/login`, `GET /auth/me`, `GET /auth/roles` | Login public; profile authenticated |
-| Inventory | `/devices`, `/groups`, `/ports` | Reads authenticated; mutations admin |
+| Inventory | `/devices`, `/groups`, `/ports` | Reads authenticated; mutations admin; device listing supports `device_type` |
 | Live config | `GET /devices/{id}/live-config` | Admin/operator |
 | Live port config | `GET /devices/{id}/ports/{port_id}/live-config` | Admin/operator; supported profiles only, interface-scoped and redacted |
 | Discovery | `POST /ports/discovery/run` | Admin/operator; queued |
 | Backups | `/backups` | History authenticated; config and diff admin/operator; redaction audit admin |
 | Web terminal | `WS /terminal/devices/{id}` | Admin/operator; allowlisted read-only commands only |
-| Vendors | `GET /vendors` | Public catalog |
+| Vendors | `GET /vendors`, `GET /vendors/catalog` | Public supported-profile and availability catalog |
+| Identity probe | `POST /vendors/detect` | Admin only; explicit read-only SSH probe with temporary credentials |
 
 New snapshots and live config responses redact common password, secret, key, community, and token directives before persistence or return. Redaction is pattern-based and is not a substitute for validating vendor-specific outputs; use lab fixtures for newly supported syntax. Legacy snapshots remain unchanged by design. The admin-only audit route returns record metadata and counts, never raw configuration values.
+
+The identity probe accepts a literal management IP address (not a hostname), rejects loopback/link-local/multicast/reserved targets, and uses Netmiko's read-only platform-detection commands with bounded connection/read timeouts. Probe credentials are used only for that request, are not persisted or logged, and the API returns only detected profile metadata—not command output. Enrollment requires a supported vendor/profile pair, so catalog-only Ubiquiti entries cannot be saved as another vendor's device. Probe results are suggestions and are never saved without the administrator submitting the enrollment form.
 
 ## Roadmap status
 
@@ -183,7 +190,7 @@ New snapshots and live config responses redact common password, secret, key, com
 
 The switch port view records discovery timestamps and supports dynamic port counts rather than fixed 24/48-port layouts. Per-interface live config is currently supported for Cisco IOS/NX-OS/XR, Huawei VRP, ArubaOS-CX, HPE ProCurve/Comware, Dell OS10, and Juniper JunOS. Other profiles return an explicit unsupported response rather than exposing the full device configuration. Add vendor/firmware output support with sanitized fixtures and lab verification.
 
-**Next planned phase:** firewall inventory and visibility. Supported firewall vendors/models and whether the initial scope includes policy visibility will be agreed before implementation; firewall-specific commands are not part of the switch port view.
+**Next planned phase:** activate Router, Firewall, and Access Point inventory views with explicit model/vendor support scopes. Firewall policy visibility and the UniFi Controller API remain separate decisions; Ubiquiti is catalog-only in this release. Firewall-specific commands are not part of the switch port view.
 
 ## Documentation
 
